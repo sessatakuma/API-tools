@@ -1,8 +1,8 @@
-from fastapi import FastAPI, Query
+from fastapi import APIRouter, Query
 from pydantic import BaseModel
 import requests
 
-app = FastAPI()
+router = APIRouter()
 
 
 class SearchResult(BaseModel):
@@ -10,7 +10,7 @@ class SearchResult(BaseModel):
     source: str
 
 
-@app.get("/nlb_search", response_model=list[SearchResult])
+@router.get("/nlb_search", response_model=list[SearchResult])
 def nlb_search(
     word: str = Query(..., description="要查詢的日文單詞"),
     page: int = Query(1, ge=1, description="頁碼"),
