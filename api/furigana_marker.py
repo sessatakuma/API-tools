@@ -94,11 +94,23 @@ def mark_furigana(request: Request):
         }
     }
 
-    # 呼叫API
+    # call API
     response = requests.post(url, headers=headers, data=json.dumps(data))
     result = response.json()
 
-    # 輸出結果
+    # if return format error
+    if "error" in result:
+        err = result["error"]
+        return Response(
+            status=400,
+            result=[],
+            error=ErrorInfo(
+                code=err.get("code"),
+                message=err.get("message")
+            )
+        ).model_dump()
+    
+    # result output
     words = result["result"]["word"]
     parsed_result=[]
 
