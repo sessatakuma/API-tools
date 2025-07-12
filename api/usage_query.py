@@ -1,7 +1,6 @@
 import json
 import re
-from tkinter import W
-from typing import Optional
+from typing import Literal, Optional
 
 import jaconv
 import requests
@@ -14,18 +13,22 @@ SITE = {
 }
 
 
-class WordRequest(BaseModel):
+class HeadWordRequest(BaseModel):
     """Class representing a request object"""
 
     word: str = Field(description="The word to query")
-    site: str = Field(default="NLB", description="The site to query, either 'NLB' or 'NLT'. Default is 'NLB'.")
+    site: Literal["NLB", "NLT"] = Field(
+        default="NLB", description="The site to query, either 'NLB' or 'NLT'. Default is 'NLB'."
+    )
 
 
 class IdRequest(BaseModel):
     """Class representing a request object for ID"""
 
-    id: int = Field(description="The ID of the word")
-    site: str = Field(default="NLB", description="The site to query, either 'NLB' or 'NLT'. Default is 'NLB'.")
+    id: str = Field(description="The ID of the word")
+    site: Literal["NLB", "NLT"] = Field(
+        default="NLB", description="The site to query, either 'NLB' or 'NLT'. Default is 'NLB'."
+    )
 
 
 class ErrorInfo(BaseModel):
@@ -46,33 +49,33 @@ class HeadWord(BaseModel):
     freq: int = Field(description="The frequency of the word in the corpus")
 
 
-class WordDetails(BaseModel):
+class IdDetails(BaseModel):
     """Class representing details of a word"""
 
-    headword: str = Field(description="The headword of the word")
-    yomi1: str = Field(description="The first yomi of the word")
-    yomi2: Optional[str] = Field(default=None, description="The second yomi of the word")
-    yomi3: Optional[str] = Field(default=None, description="The third yomi of the word")
-    romaji1: str = Field(description="The first romaji of the word")
-    romaji2: Optional[str] = Field(default=None, description="The second romaji of the word")
-    romaji3: Optional[str] = Field(default=None, description="The third romaji of the word")
+    base: dict = Field(description="The base form of the word")
+    subcorpus: list[dict] = Field(description="The subcorpus of the word")
+    shojikei: list[dict] = Field(description="The shojikei of the word")
+    subcorpus_shojikei: list[dict] = Field(description="The distribution of shojikei by subcorpus of the word")
+    katuyokei: list[dict] = Field(description="The katuyokei of the word")
+    setuzoku: list[dict] = Field(description="The subsequent auxiliary verbs of the word")
+    patternfreqorder: list[dict] = Field(description="The frequency of the word in different patterns")
 
 
 class HeadWordResponse(BaseModel):
     """Class representing a response object for headword query"""
 
     status: int = Field(default=200, description="Status code of response align with RFC 9110")
-    result: list[HeadWord] = Field(description="A list contains headword results")
+    result: Optional[list[HeadWord]] = Field(description="A list contains headword results")
     error: Optional[ErrorInfo] = Field(
         default=None, description="An object that describe the details of an error when occur"
     )
 
 
-class WordResponse(BaseModel):
+class IdResponse(BaseModel):
     """Class representing a response object for word details"""
 
     status: int = Field(default=200, description="Status code of response align with RFC 9110")
-    result: list[WordDetails] = Field(description="A list contains word details")
+    result: Optional[IdDetails] = Field(description="Details of the word with the given ID")
     error: Optional[ErrorInfo] = Field(
         default=None, description="An object that describe the details of an error when occur"
     )
@@ -83,6 +86,7 @@ router = APIRouter()
 
 def text_type(text: str) -> str | None:
     """Determine the type of text: yomi, romaji, or headword."""
+
     if not text:
         return None
 
@@ -96,9 +100,10 @@ def text_type(text: str) -> str | None:
         return "headword"
 
 
-@router.post("/QueryHeadWord", tags=["UsageQuery"], response_model=HeadWordResponse)
-def get_headword(request: WordRequest) -> list[HeadWord] | None:
+@router.post("/UsageQuery/HeadWords/", tags=["UsageQuery"], response_model=HeadWordResponse)
+def get_headwords(request: HeadWordRequest):
     """Get headword_list for the word."""
+
     match text_type(request.word):
         case "yomi":
             rules = [
@@ -114,9 +119,6 @@ def get_headword(request: WordRequest) -> list[HeadWord] | None:
             ]
         case "headword":
             rules = [{"field": "headword", "op": "eq", "data": request.word}]
-        case _:
-            print(f"Unknown text type for word '{request.word}'")
-            return None
 
     filter = {"groupOp": "OR", "rules": rules}
 
@@ -157,111 +159,128 @@ def get_headword(request: WordRequest) -> list[HeadWord] | None:
                         )
                         print(f"Found result: {search_result}")
                         result.append(search_result)
-
-                ret = HeadWordResponse(status=200, result=result)
-            else:
-                print(f"No results found for word '{request.word}'")
-                ret = HeadWordResponse(
-                    status=404,
-                    result=[],
-                    error=ErrorInfo(code=404, message=f"No results found for word '{request.word}'"),
-                )
+            return HeadWordResponse(status=200, result=result).model_dump()
         except Exception as e:
             print(f"Error parsing JSON: {e}")
-            ret = HeadWordResponse(
+            return HeadWordResponse(
                 status=500,
-                result=[],
+                result=None,
                 error=ErrorInfo(code=500, message=f"Error parsing JSON: {e}"),
-            )
+            ).model_dump()
     else:
         print(f"HTTP error {response.status_code}")
-        ret = HeadWordResponse(
+        return HeadWordResponse(
             status=response.status_code,
-            result=[],
+            result=None,
             error=ErrorInfo(code=response.status_code, message=f"HTTP error {response.status_code}"),
-        )
-
-    print(f"Returning response: {ret}")
-    return ret.model_dump()
+        ).model_dump()
 
 
-def search(site: str, word: str) -> list[WordDetails]:
-    """Search for a word in the specified site."""
-    headwordlist = get_headword(word)
-    if not headwordlist:
-        return []
+@router.post("/UsageQuery/IdDetails/", tags=["UsageQuery"], response_model=IdResponse)
+def get_id_details(request: IdRequest):
+    """Get details for the word with the given ID."""
 
-    url = f"https://nlb.ninjal.ac.jp/patternfreqorder/{id}/"
-    headers = {
-        "Content-Type": "application/json",
-        "Referer": f"https://nlb.ninjal.ac.jp/headword/{id}/",
-    }
+    def fetch_data(mode: Literal["get", "post"], endpoint: str, target: str = ""):
+        """Helper function to fetch and parse JSON data"""
+        match mode:
+            case "get":
+                headers = {
+                    "Referer": f"{SITE[request.site]}/headword/{request.id}/",
+                    "User-Agent": "Mozilla/5.0",
+                }
+                response = requests.get(f"{SITE[request.site]}/{endpoint}/{request.id}/", headers=headers)
+            case "post":
+                headers = {
+                    "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
+                    "Referer": f"{SITE[request.site]}/headword/{request.id}/",
+                    "User-Agent": "Mozilla/5.0",
+                }
+                response = requests.post(f"{SITE[request.site]}/{endpoint}/{request.id}/", headers=headers)
 
-    response = requests.post(url, headers=headers)
+        if response.status_code == 200:
+            try:
+                data = response.json()
+                ret = data[target] if target and data.get(target) else data
+                # print(f"Fetched {target}: {ret}")
+                return ret
+            except Exception as e:
+                print(f"Error parsing JSON while fetching {endpoint}: {e}")
+                return IdResponse(
+                    status=500,
+                    result=None,
+                    error=ErrorInfo(code=500, message=f"Error parsing JSON while fetching {endpoint}: {e}"),
+                )
+        else:
+            print(f"HTTP error {response.status_code} while fetching {endpoint}")
+            return IdResponse(
+                status=response.status_code,
+                result=None,
+                error=ErrorInfo(
+                    code=response.status_code, message=f"HTTP error {response.status_code} while fetching {endpoint}"
+                ),
+            )
 
-    if response.status_code == 200:
-        try:
-            data = response.json()
-            if data.get("rows") and len(data["rows"]) > 0:
-                results = [(row["name"], row["freq"]) for row in data["rows"]]
-                print(results)
-                return results
-            else:
-                print(f"No results found for word '{word}'")
-                return None
-        except Exception as e:
-            print(f"Error parsing JSON: {e}")
-            return None
-    else:
-        print(f"HTTP error {response.status_code}")
-        return []
+    # IdResponse.base
+    base = fetch_data("get", "basicinfob")
+    if isinstance(base, IdResponse):
+        return base.model_dump()
+    # IdResponse.subcorpus
+    subcorpus = [] if request.site == "NLT" else fetch_data("get", "basicinfosc", "subcorpus")
+    if isinstance(subcorpus, IdResponse):
+        return subcorpus.model_dump()
+    # IdResponse.shojikei
+    shojikei = fetch_data("get", "basicinfosj", "shojikei")
+    if isinstance(shojikei, IdResponse):
+        return shojikei.model_dump()
+    # IdResponse.subcorpus_shojikei
+    subcorpus_shojikei = [] if request.site == "NLT" else fetch_data("post", "basicinfoss", "subcorpus")
+    if isinstance(subcorpus_shojikei, IdResponse):
+        return subcorpus_shojikei.model_dump()
+    # IdResponse.katuyokei
+    katuyokei = [] if request.site == "NLT" else fetch_data("get", "basicinfoky", "katuyokei")
+    if isinstance(katuyokei, IdResponse):
+        return katuyokei.model_dump()
+    # IdResponse.setuzoku
+    setuzoku = fetch_data("get", "basicinfojs", "setuzoku")
+    if isinstance(setuzoku, IdResponse):
+        return setuzoku.model_dump()
+    # IdResponse.patternfreqorder
+    patternfreqorder = fetch_data("post", "patternfreqorder", "rows")
+    if isinstance(patternfreqorder, IdResponse):
+        return patternfreqorder.model_dump()
 
+    print(patternfreqorder)
 
-@router.get("/nlb_search", response_model=list[HeadWord])
-def nlb_search(
-    word: str = Query(..., description="Japanese word to search for"),
-):
-    id = get_headword(word)
-    if not id:
-        return []
-
-    url = f"https://nlb.ninjal.ac.jp/patternfreqorder/{id}/"
-    headers = {
-        "Content-Type": "application/json",
-        "Referer": f"https://nlb.ninjal.ac.jp/headword/{id}/",
-    }
-
-    response = requests.post(url, headers=headers)
-
-    if response.status_code == 200:
-        try:
-            data = response.json()
-            if data.get("rows") and len(data["rows"]) > 0:
-                results = [(row["name"], row["freq"]) for row in data["rows"]]
-                print(results)
-                return results
-            else:
-                print(f"No results found for word '{word}'")
-                return None
-        except Exception as e:
-            print(f"Error parsing JSON: {e}")
-            return None
-    else:
-        print(f"HTTP error {response.status_code}")
-        return []
+    return IdResponse(
+        status=200,
+        result=IdDetails(
+            base=base,
+            subcorpus=subcorpus,
+            shojikei=shojikei,
+            subcorpus_shojikei=subcorpus_shojikei,
+            katuyokei=katuyokei,
+            setuzoku=setuzoku,
+            patternfreqorder=patternfreqorder,
+        ),
+    ).model_dump()
 
 
 # Test code
 if __name__ == "__main__":
-    while True:
-        word = input("Enter a word to search (or 'exit' to quit): ")
-        if word.lower() == "q":
-            break
-        get_headword(WordRequest(word=word, site="NLB"))
-    while True:
-        word = input("Enter a word to search (or 'exit' to quit): ")
-        if word.lower() == "q":
-            break
-        get_headword(WordRequest(word=word, site="NLT"))
-    # nlb_search("浴びる")
-    # nlb_search("ない")
+    # print("==== Testing NLB ====")
+    # get_headwords(HeadWordRequest(word="走る", site="NLB"))
+    # print("=" * 10)
+    # get_headwords(HeadWordRequest(word="はしる", site="NLB"))
+    # print("=" * 10)
+    # get_headwords(HeadWordRequest(word="hashiru", site="NLB"))
+    # print("\n==== Testing NLT ====")
+    # get_headwords(HeadWordRequest(word="走る", site="NLT"))
+    # print("=" * 10)
+    # get_headwords(HeadWordRequest(word="はしる", site="NLT"))
+    # print("=" * 10)
+    # get_headwords(HeadWordRequest(word="hashiru", site="NLT"))
+    # print("=" * 100)
+    print("\n==== Testing NLB ====")
+    get_id_details(IdRequest(id="V.00093", site="NLB"))
+    print("\n==== Testing NLT ====")
+    get_id_details(IdRequest(id="V.00128", site="NLT"))
