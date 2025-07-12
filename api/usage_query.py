@@ -14,10 +14,18 @@ SITE = {
 }
 
 
-class Request(BaseModel):
+class WordRequest(BaseModel):
     """Class representing a request object"""
 
-    text: str = Field(description="The text to query")
+    word: str = Field(description="The word to query")
+    site: str = Field(default="NLB", description="The site to query, either 'NLB' or 'NLT'. Default is 'NLB'.")
+
+
+class IdRequest(BaseModel):
+    """Class representing a request object for ID"""
+
+    id: int = Field(description="The ID of the word")
+    site: str = Field(default="NLB", description="The site to query, either 'NLB' or 'NLT'. Default is 'NLB'.")
 
 
 class ErrorInfo(BaseModel):
@@ -27,8 +35,8 @@ class ErrorInfo(BaseModel):
     message: str = Field(description="The error message that describe the details of an error")
 
 
-class SearchResult(BaseModel):
-    """Class representing a search result object"""
+class HeadWord(BaseModel):
+    """Class representing a headword object"""
 
     id: int = Field(description="The id of the word")
     headword_id: str = Field(description="The headword id of the word")
@@ -50,11 +58,21 @@ class WordDetails(BaseModel):
     romaji3: Optional[str] = Field(default=None, description="The third romaji of the word")
 
 
-class Response(BaseModel):
-    """Class representing a response object"""
+class HeadWordResponse(BaseModel):
+    """Class representing a response object for headword query"""
 
     status: int = Field(default=200, description="Status code of response align with RFC 9110")
-    result: list[SearchResult] = Field(description="A list contains search results")
+    result: list[HeadWord] = Field(description="A list contains headword results")
+    error: Optional[ErrorInfo] = Field(
+        default=None, description="An object that describe the details of an error when occur"
+    )
+
+
+class WordResponse(BaseModel):
+    """Class representing a response object for word details"""
+
+    status: int = Field(default=200, description="Status code of response align with RFC 9110")
+    result: list[WordDetails] = Field(description="A list contains word details")
     error: Optional[ErrorInfo] = Field(
         default=None, description="An object that describe the details of an error when occur"
     )
@@ -78,25 +96,26 @@ def text_type(text: str) -> str | None:
         return "headword"
 
 
-def get_id(site: str, word: str) -> list[SearchResult] | None:
-    """Get headword_id for the word."""
-    match text_type(word):
+@router.post("/QueryHeadWord", tags=["UsageQuery"], response_model=HeadWordResponse)
+def get_headword(request: WordRequest) -> list[HeadWord] | None:
+    """Get headword_list for the word."""
+    match text_type(request.word):
         case "yomi":
             rules = [
-                {"field": "yomi1", "op": "eq", "data": jaconv.hira2kata(word)},
-                {"field": "yomi2", "op": "ew", "data": jaconv.hira2kata(word)},
-                {"field": "yomi3", "op": "ew", "data": jaconv.hira2kata(word)},
+                {"field": "yomi1", "op": "eq", "data": jaconv.hira2kata(request.word)},
+                {"field": "yomi2", "op": "ew", "data": jaconv.hira2kata(request.word)},
+                {"field": "yomi3", "op": "ew", "data": jaconv.hira2kata(request.word)},
             ]
         case "romaji":
             rules = [
-                {"field": "romaji1", "op": "eq", "data": word},
-                {"field": "romaji2", "op": "ew", "data": word},
-                {"field": "romaji3", "op": "ew", "data": word},
+                {"field": "romaji1", "op": "eq", "data": request.word},
+                {"field": "romaji2", "op": "ew", "data": request.word},
+                {"field": "romaji3", "op": "ew", "data": request.word},
             ]
         case "headword":
-            rules = [{"field": "headword", "op": "eq", "data": word}]
+            rules = [{"field": "headword", "op": "eq", "data": request.word}]
         case _:
-            print(f"Unknown text type for word '{word}'")
+            print(f"Unknown text type for word '{request.word}'")
             return None
 
     filter = {"groupOp": "OR", "rules": rules}
@@ -106,10 +125,10 @@ def get_id(site: str, word: str) -> list[SearchResult] | None:
         "filters": json.dumps(filter),
     }
 
-    url = f"{site}/headwordlist_all/"
+    url = f"{SITE[request.site]}/headwordlist_all/"
     headers = {
         "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
-        "Referer": f"{site}/search/",
+        "Referer": f"{SITE[request.site]}/search/",
         "User-Agent": "Mozilla/5.0",
     }
 
@@ -128,7 +147,7 @@ def get_id(site: str, word: str) -> list[SearchResult] | None:
                     romaji_display = row.get("romaji_display")
                     freq = row.get("freq")
                     if id and headword_id and headword and yomi_display and romaji_display and freq:
-                        search_result = SearchResult(
+                        search_result = HeadWord(
                             id=id,
                             headword_id=headword_id,
                             headword=headword,
@@ -139,21 +158,36 @@ def get_id(site: str, word: str) -> list[SearchResult] | None:
                         print(f"Found result: {search_result}")
                         result.append(search_result)
 
-                return result
+                ret = HeadWordResponse(status=200, result=result)
             else:
-                print(f"No results found for word '{word}'")
-                return None
+                print(f"No results found for word '{request.word}'")
+                ret = HeadWordResponse(
+                    status=404,
+                    result=[],
+                    error=ErrorInfo(code=404, message=f"No results found for word '{request.word}'"),
+                )
         except Exception as e:
             print(f"Error parsing JSON: {e}")
-            return None
+            ret = HeadWordResponse(
+                status=500,
+                result=[],
+                error=ErrorInfo(code=500, message=f"Error parsing JSON: {e}"),
+            )
     else:
         print(f"HTTP error {response.status_code}")
-        return None
+        ret = HeadWordResponse(
+            status=response.status_code,
+            result=[],
+            error=ErrorInfo(code=response.status_code, message=f"HTTP error {response.status_code}"),
+        )
+
+    print(f"Returning response: {ret}")
+    return ret.model_dump()
 
 
 def search(site: str, word: str) -> list[WordDetails]:
     """Search for a word in the specified site."""
-    headwordlist = get_id(word)
+    headwordlist = get_headword(word)
     if not headwordlist:
         return []
 
@@ -183,11 +217,11 @@ def search(site: str, word: str) -> list[WordDetails]:
         return []
 
 
-@router.get("/nlb_search", response_model=list[SearchResult])
+@router.get("/nlb_search", response_model=list[HeadWord])
 def nlb_search(
     word: str = Query(..., description="Japanese word to search for"),
 ):
-    id = get_id(word)
+    id = get_headword(word)
     if not id:
         return []
 
@@ -223,11 +257,11 @@ if __name__ == "__main__":
         word = input("Enter a word to search (or 'exit' to quit): ")
         if word.lower() == "q":
             break
-        get_id(SITE["NLB"], word)
+        get_headword(WordRequest(word=word, site="NLB"))
     while True:
         word = input("Enter a word to search (or 'exit' to quit): ")
         if word.lower() == "q":
             break
-        get_id(SITE["NLT"], word)
+        get_headword(WordRequest(word=word, site="NLT"))
     # nlb_search("浴びる")
     # nlb_search("ない")
