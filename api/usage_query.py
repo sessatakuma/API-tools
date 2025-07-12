@@ -71,6 +71,16 @@ class HeadWordResponse(BaseModel):
     )
 
 
+class URLResponse(BaseModel):
+    """Class representing a response object for URL query"""
+
+    status: int = Field(default=200, description="Status code of response align with RFC 9110")
+    result: Optional[list[str]] = Field(description="A list contains URLs for the headwords")
+    error: Optional[ErrorInfo] = Field(
+        default=None, description="An object that describe the details of an error when occur"
+    )
+
+
 class IdResponse(BaseModel):
     """Class representing a response object for word details"""
 
@@ -157,7 +167,7 @@ def get_headwords(request: HeadWordRequest):
                             romaji_display=romaji_display,
                             freq=freq,
                         )
-                        print(f"Found result: {search_result}")
+                        # print(f"Found result: {search_result}")
                         result.append(search_result)
             return HeadWordResponse(status=200, result=result).model_dump()
         except Exception as e:
@@ -174,6 +184,24 @@ def get_headwords(request: HeadWordRequest):
             result=None,
             error=ErrorInfo(code=response.status_code, message=f"HTTP error {response.status_code}"),
         ).model_dump()
+
+
+@router.post("/UsageQuery/URL/", tags=["UsageQuery"], response_model=URLResponse)
+def get_urls(request: HeadWordRequest):
+    """Get URL for the word with the given word."""
+    response = get_headwords(request)
+
+    if response["status"] != 200:
+        return URLResponse(
+            status=response["status"],
+            result=None,
+            error=response["error"],
+        ).model_dump()
+
+    result = [f'{SITE[request.site]}/headword/{headword["headword_id"]}/' for headword in response["result"]]
+    print(f"Generated URLs: {result}")
+
+    return URLResponse(status=200, result=result).model_dump()
 
 
 @router.post("/UsageQuery/IdDetails/", tags=["UsageQuery"], response_model=IdResponse)
@@ -267,6 +295,12 @@ def get_id_details(request: IdRequest):
 
 # Test code
 if __name__ == "__main__":
+    get_urls(HeadWordRequest(word="走る", site="NLB"))
+    get_urls(HeadWordRequest(word="はしる", site="NLB"))
+    get_urls(HeadWordRequest(word="hashiru", site="NLB"))
+    get_urls(HeadWordRequest(word="走る", site="NLT"))
+    get_urls(HeadWordRequest(word="はしる", site="NLT"))
+    get_urls(HeadWordRequest(word="hashiru", site="NLT"))
     # print("==== Testing NLB ====")
     # get_headwords(HeadWordRequest(word="走る", site="NLB"))
     # print("=" * 10)
@@ -280,7 +314,7 @@ if __name__ == "__main__":
     # print("=" * 10)
     # get_headwords(HeadWordRequest(word="hashiru", site="NLT"))
     # print("=" * 100)
-    print("\n==== Testing NLB ====")
-    get_id_details(IdRequest(id="V.00093", site="NLB"))
-    print("\n==== Testing NLT ====")
-    get_id_details(IdRequest(id="V.00128", site="NLT"))
+    # print("\n==== Testing NLB ====")
+    # get_id_details(IdRequest(id="V.00093", site="NLB"))
+    # print("\n==== Testing NLT ====")
+    # get_id_details(IdRequest(id="V.00128", site="NLT"))
