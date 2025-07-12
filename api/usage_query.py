@@ -221,8 +221,13 @@ def nlb_search(
 if __name__ == "__main__":
     while True:
         word = input("Enter a word to search (or 'exit' to quit): ")
-        if word.lower() == "exit":
+        if word.lower() == "q":
             break
         get_id(SITE["NLB"], word)
+    while True:
+        word = input("Enter a word to search (or 'exit' to quit): ")
+        if word.lower() == "q":
+            break
+        get_id(SITE["NLT"], word)
     # nlb_search("浴びる")
     # nlb_search("ない")
