@@ -2,6 +2,7 @@
 An API that mark furigana of given query text
 """
 
+import os
 from typing import Optional, List
 from fastapi import APIRouter
 from pydantic import BaseModel, Field
@@ -65,8 +66,12 @@ class Response(BaseModel):
 router = APIRouter()
 
 url = "https://jlp.yahooapis.jp/FuriganaService/V2/furigana"
-with open("./secret.yaml", encoding="utf-8") as f:
-    clientid = yaml.safe_load(f)['Yahoo_API_key']
+
+if 'Yahoo_API_key' in os.environ:
+    clientid = os.environ['Yahoo_API_key']
+else:
+    with open("./secret.yaml", encoding="utf-8") as f:
+        clientid = yaml.safe_load(f)['Yahoo_API_key']
 
 @router.post("/MarkFurigana/", tags=["MarkFurigana"], response_model=Response)
 def mark_furigana(request: Request):
