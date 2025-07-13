@@ -169,16 +169,23 @@ def get_headwords(request: HeadWordRequest):
                         )
                         # print(f"Found result: {search_result}")
                         result.append(search_result)
-            return HeadWordResponse(status=200, result=result).model_dump()
+                return HeadWordResponse(status=200, result=result).model_dump()
+            else:
+                # print("No results found")
+                return HeadWordResponse(
+                    status=404,
+                    result=None,
+                    error=ErrorInfo(code=404, message="No results found for the given word"),
+                ).model_dump()
         except Exception as e:
-            print(f"Error parsing JSON: {e}")
+            # print(f"Error parsing JSON: {e}")
             return HeadWordResponse(
                 status=500,
                 result=None,
                 error=ErrorInfo(code=500, message=f"Error parsing JSON: {e}"),
             ).model_dump()
     else:
-        print(f"HTTP error {response.status_code}")
+        # print(f"HTTP error {response.status_code}")
         return HeadWordResponse(
             status=response.status_code,
             result=None,
@@ -199,7 +206,7 @@ def get_urls(request: HeadWordRequest):
         ).model_dump()
 
     result = [f'{SITE[request.site]}/headword/{headword["headword_id"]}/' for headword in response["result"]]
-    print(f"Generated URLs: {result}")
+    # print(f"Generated URLs: {result}")
 
     return URLResponse(status=200, result=result).model_dump()
 
@@ -232,14 +239,14 @@ def get_id_details(request: IdRequest):
                 # print(f"Fetched {target}: {ret}")
                 return ret
             except Exception as e:
-                print(f"Error parsing JSON while fetching {endpoint}: {e}")
+                # print(f"Error parsing JSON while fetching {endpoint}: {e}")
                 return IdResponse(
                     status=500,
                     result=None,
                     error=ErrorInfo(code=500, message=f"Error parsing JSON while fetching {endpoint}: {e}"),
                 )
         else:
-            print(f"HTTP error {response.status_code} while fetching {endpoint}")
+            # print(f"HTTP error {response.status_code} while fetching {endpoint}")
             return IdResponse(
                 status=response.status_code,
                 result=None,
@@ -277,7 +284,7 @@ def get_id_details(request: IdRequest):
     if isinstance(patternfreqorder, IdResponse):
         return patternfreqorder.model_dump()
 
-    print(patternfreqorder)
+    # print(patternfreqorder)
 
     return IdResponse(
         status=200,
@@ -295,12 +302,13 @@ def get_id_details(request: IdRequest):
 
 # Test code
 if __name__ == "__main__":
-    get_urls(HeadWordRequest(word="走る", site="NLB"))
-    get_urls(HeadWordRequest(word="はしる", site="NLB"))
-    get_urls(HeadWordRequest(word="hashiru", site="NLB"))
-    get_urls(HeadWordRequest(word="走る", site="NLT"))
-    get_urls(HeadWordRequest(word="はしる", site="NLT"))
-    get_urls(HeadWordRequest(word="hashiru", site="NLT"))
+    print(get_urls(HeadWordRequest(word="日本", site="NLB")))
+    print(get_urls(HeadWordRequest(word="走る", site="NLB")))
+    print(get_urls(HeadWordRequest(word="はしる", site="NLB")))
+    print(get_urls(HeadWordRequest(word="hashiru", site="NLB")))
+    print(get_urls(HeadWordRequest(word="走る", site="NLT")))
+    print(get_urls(HeadWordRequest(word="はしる", site="NLT")))
+    print(get_urls(HeadWordRequest(word="hashiru", site="NLT")))
     # print("==== Testing NLB ====")
     # get_headwords(HeadWordRequest(word="走る", site="NLB"))
     # print("=" * 10)
