@@ -21,12 +21,23 @@ tags_metadata = [
 ]
 
 
-punctuation_marks = set(["。", "，", "、", "・", "——", "……", "—", "…", "「", "」", "『", "』", "（", "）", "—", "、、、", "、", "————", "—", "？", "！", ".", ",", "：", "；", "(", ")", "\"", "--", "-", "", "/", ":", ";", "！", "＂", "＃", "＄", "％", "＆", "＼", "’", "（", "）", "＊", "＋", "，", "－", "．", "／", "：", "；", "＜", "＝", "＞", "？", "＠", "［", "＼", "］", "︿", "＿", "‵", "｛", "｝", "｜", "～"]).union(set(string.punctuation))
-skip_marks = punctuation_marks.union(set(string.ascii_lowercase + string.ascii_uppercase))
+punctuation_marks = set(["。", "，", "、", "・", "——", "……", "—", "…", "「", "」", "『", "』", "（", "）", "—", "、、、", "、", "————", "—", "？", "！", ".", ",", "：", "；", "(", ")", "\"", "--", "-", "", "/", ":", ";", "！", "＂", "＃", "＄", "％", "＆", "＼", "’", "（", "）", "＊", "＋", "，", "－", "．", "／", "：", "；", "＜", "＝", "＞", "？", "＠", "［", "＼", "］", "︿", "＿", "‵", "｛", "｝", "｜", "～", "“", "”"]).union(set(string.punctuation))
+skip_marks = set(string.ascii_lowercase + string.ascii_uppercase)
 
 def clean_query(query):
     """For OJAD, the query text should without punctuations and alphabets for better result"""
     return ''.join(chr for chr in query if chr not in skip_marks)
+
+def is_kana_or_kanji(char):
+    """Check whether given character is kana or kanji (ignore half-width kana)"""
+    if char == '\u30a0':
+        # '゠', which should be regard as punchutation
+        return False
+    kana = range(0x3040, 0x30FF + 1)
+    kanji = range(0x4E00, 0x9FFF + 1)
+    if ord(char) in kana or ord(char) in kanji:
+        return True
+    return False
 
 class Request(BaseModel):
     """Class representing a request object"""
@@ -81,8 +92,6 @@ router = APIRouter()
 
 def get_ojad_result(query_text: str) -> List:
     """Parse cleaned query_text to OJAD, concate whole result as a list"""
-    # Parse to suzukikun
-    query_text = clean_query(query_text)
 
     # URL to suzukikun(すずきくん)
     url = "https://www.gavo.t.u-tokyo.ac.jp/ojad/phrasing/index"
@@ -146,11 +155,13 @@ def mark_accent(request: Request) -> dict[str, Any]:
         yahoo_surface = furigana_result.surface
         accent = -1
 
-        # If query sub-text contains punchutations or alphabets, we should ignore it
-        # [TODO] We shall filter out all non-kana and non-kanji words, instead of
-        # Filter out only punchutations and alphabets
+        # If query sub-text contains non-kana and non-kanji words, we should ignore it
+        # Including alphabet and punchutation and others
+        # For punctuation marks, since Yahoo will hold the original query text
+        # While OJAD may replace or remove the punctuation marks
+        # Therefore we only reserve the punctuation marks from Yahoo
         if isinstance(furigana_result, SingleWordResultObject) and \
-            any(chr in skip_marks for chr in yahoo_furigana):
+            any(not is_kana_or_kanji(chr) for chr in yahoo_furigana):
             final_response_results.append(
                 SingleWordAccentResultObject(
                     furigana=yahoo_furigana,
@@ -160,14 +171,15 @@ def mark_accent(request: Request) -> dict[str, Any]:
             )
             continue
 
-        # Skip leading skip marks in OJAD result
+        # Remove all mismatching prefix
         tmp_ojad_idx = ojad_idx_cnt
-        while ojad_results[tmp_ojad_idx]['text'] in skip_marks:
+        while tmp_ojad_idx < len(ojad_results) and \
+              not yahoo_furigana.startswith(ojad_results[tmp_ojad_idx]['text']):
             tmp_ojad_idx += 1
 
         ojad_moji_count = 0
         ojad_furigana = ""
-        has_zero = has_one = False
+        has_zero_accent = has_one_accent = False
 
         while ojad_moji_count < len(yahoo_furigana) and tmp_ojad_idx < len(ojad_results):
             ojad_text = ojad_results[tmp_ojad_idx]['text']
@@ -176,14 +188,14 @@ def mark_accent(request: Request) -> dict[str, Any]:
 
             accent_value = ojad_results[tmp_ojad_idx]['accent']
             if accent_value == 0:
-                has_zero = True
+                has_zero_accent = True
             elif accent_value == 1:
-                has_one = True
+                has_one_accent = True
                 accent = tmp_ojad_idx - ojad_idx_cnt + 1
 
             tmp_ojad_idx += 1
 
-        if has_zero and not has_one:
+        if has_zero_accent and not has_one_accent:
             accent = 0
 
         if ojad_moji_count == len(yahoo_furigana) and ojad_furigana == yahoo_furigana:
