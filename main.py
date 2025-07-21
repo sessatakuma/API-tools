@@ -5,9 +5,17 @@ An API interface that provide two functionalities
 """
 
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from api import accent_marker, furigana_marker, usage_query, dict_query
 
 app = FastAPI()
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 # Include routers from different modules
 app.include_router(accent_marker.router, prefix="/api")
