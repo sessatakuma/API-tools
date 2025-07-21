@@ -49,6 +49,13 @@ class HeadWord(BaseModel):
     freq: int = Field(description="The frequency of the word in the corpus")
 
 
+class URL(BaseModel):
+    """Class representing a URL object"""
+
+    word: str = Field(description="The headword of the word")
+    url: str = Field(description="The URL of the headword")
+
+
 class IdDetails(BaseModel):
     """Class representing details of a word"""
 
@@ -75,7 +82,7 @@ class URLResponse(BaseModel):
     """Class representing a response object for URL query"""
 
     status: int = Field(default=200, description="Status code of response align with RFC 9110")
-    result: Optional[list[str]] = Field(description="A list contains URLs for the headwords")
+    result: Optional[list[URL]] = Field(description="A list contains URLs for the headwords")
     error: Optional[ErrorInfo] = Field(
         default=None, description="An object that describe the details of an error when occur"
     )
@@ -205,7 +212,9 @@ def get_urls(request: HeadWordRequest):
             error=response["error"],
         ).model_dump()
 
-    result = [f'{SITE[request.site]}/headword/{headword["headword_id"]}/' for headword in response["result"]]
+    result = []
+    for res in response["result"]:
+        result.append(URL(word=res["headword"], url=f'{SITE[request.site]}/headword/{res["headword_id"]}/'))
     # print(f"Generated URLs: {result}")
 
     return URLResponse(status=200, result=result).model_dump()
@@ -302,10 +311,11 @@ def get_id_details(request: IdRequest):
 
 # Test code
 if __name__ == "__main__":
-    print(get_urls(HeadWordRequest(word="日本", site="NLB")))
+    print("==== Testing NLB ====")
     print(get_urls(HeadWordRequest(word="走る", site="NLB")))
     print(get_urls(HeadWordRequest(word="はしる", site="NLB")))
     print(get_urls(HeadWordRequest(word="hashiru", site="NLB")))
+    print("\n==== Testing NLT ====")
     print(get_urls(HeadWordRequest(word="走る", site="NLT")))
     print(get_urls(HeadWordRequest(word="はしる", site="NLT")))
     print(get_urls(HeadWordRequest(word="hashiru", site="NLT")))
