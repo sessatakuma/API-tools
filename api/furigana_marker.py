@@ -67,11 +67,14 @@ router = APIRouter()
 
 url = "https://jlp.yahooapis.jp/FuriganaService/V2/furigana"
 
-if 'Yahoo_API_key' in os.environ:
-    clientid = os.environ['Yahoo_API_key']
-else:
-    with open("./secret.yaml", encoding="utf-8") as f:
-        clientid = yaml.safe_load(f)['Yahoo_API_key']
+try:
+    if 'Yahoo_API_key' in os.environ:
+        clientid = os.environ['Yahoo_API_key']
+    else:
+        with open("./secret.yaml", encoding="utf-8") as f:
+            clientid = yaml.safe_load(f)['Yahoo_API_key']
+except (FileNotFoundError, KeyError, yaml.YAMLError) as e:
+    raise RuntimeError(f"Failed to load Yahoo_API_key: {e}")
 
 @router.post("/MarkFurigana/", tags=["MarkFurigana"], response_model=Response)
 def mark_furigana(request: Request):
@@ -95,8 +98,49 @@ def mark_furigana(request: Request):
     }
 
     # call API
-    response = requests.post(url, headers=headers, data=json.dumps(data))
-    result = response.json()
+    try:
+        response = requests.post(url, headers=headers, data=json.dumps(data), timeout=5)
+        response.raise_for_status()
+    except requests.exceptions.Timeout:
+        return Response(
+            status=504,
+            result=[],
+            error=ErrorInfo(code=504, message="Request to Yahoo API timed out")
+        ).model_dump()
+    except requests.exceptions.ConnectionError:
+        return Response(
+            status=503,
+            result=[],
+            error=ErrorInfo(code=503, message="Failed to connect to Yahoo API")
+        ).model_dump()
+    except requests.exceptions.HTTPError as http_err:
+        return Response(
+            status=response.status_code,
+            result=[],
+            error=ErrorInfo(code=response.status_code, message=f"HTTP error occurred: {http_err}")
+        ).model_dump()
+    except Exception as e:
+        return Response(
+            status=500,
+            result=[],
+            error=ErrorInfo(code=500, message=f"Unexpected error: {str(e)}")
+        ).model_dump()
+
+    try:
+        result = response.json()
+    except json.JSONDecodeError:
+        return Response(
+            status=502,
+            result=[],
+            error=ErrorInfo(code=502, message="Invalid JSON response from Yahoo API")
+        ).model_dump()
+
+    if not isinstance(result, dict) or "result" not in result or "word" not in result["result"]:
+        return Response(
+            status=502,
+            result=[],
+            error=ErrorInfo(code=502, message="Unexpected response structure from Yahoo API")
+        ).model_dump()
 
     # if return format error
     if "error" in result:
