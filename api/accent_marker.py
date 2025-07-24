@@ -32,8 +32,9 @@ def clean_query(query):
 
 def is_kana_or_kanji(char):
     """Check whether given character is kana or kanji (ignore half-width kana)"""
-    if char == '\u30a0':
-        # '゠', which should be regard as punchutation
+    exception_symbols = ['\u30a0', '\u30fb', '\u30fc', '\u30fd', '\u30fe', '\u30ff']
+    if char in exception_symbols:
+        # '゠', '・', 'ー', 'ヽ', 'ヾ', 'ヿ' which should be regard as punchutation
         return False
     kana = range(0x3040, 0x30FF + 1)
     kanji = range(0x4E00, 0x9FFF + 1)
@@ -164,6 +165,7 @@ def mark_accent(request: Request) -> dict[str, Any]:
             # Therefore we only reserve the punctuation marks from Yahoo
             if isinstance(furigana_result, SingleWordResultObject) and \
                 any(not is_kana_or_kanji(chr) for chr in yahoo_furigana):
+                print(f"Successfully processing {yahoo_furigana} \t with {yahoo_furigana}")
                 final_response_results.append(
                     SingleWordAccentResultObject(
                         furigana=yahoo_furigana,
@@ -264,6 +266,15 @@ def mark_accent(request: Request) -> dict[str, Any]:
             error=ErrorInfo(
                 code=500,
                 message=f"Connection error: {conn_err}"
+            )
+        )
+    except Exception as e:
+        response = Response(
+            status=500,
+            result=[],
+            error=ErrorInfo(
+                code=500,
+                message=f"Non-usual error occurs: {e}"
             )
         )
     return response.model_dump()
