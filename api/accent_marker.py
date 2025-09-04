@@ -148,14 +148,14 @@ def mark_accent(request: Request) -> dict[str, Any]:
     """Receive POST request, return a JSON response"""
     try:
         query_text = request.text
-        furigana_results: List = FuriganaResponse(**mark_furigana(Request(text=query_text))).result
+        furigana_results: List = mark_furigana(Request(text=query_text))['result']
         ojad_results = get_ojad_result(query_text)
 
         final_response_results = []
         ojad_idx_cnt = 0
         for furigana_result in furigana_results:
-            yahoo_furigana = furigana_result.furigana
-            yahoo_surface = furigana_result.surface
+            yahoo_furigana = furigana_result['furigana']
+            yahoo_surface = furigana_result['surface']
             accent = -1
 
             # If query sub-text contains non-kana and non-kanji words, we should ignore it
@@ -163,7 +163,7 @@ def mark_accent(request: Request) -> dict[str, Any]:
             # For punctuation marks, since Yahoo will hold the original query text
             # While OJAD may replace or remove the punctuation marks
             # Therefore we only reserve the punctuation marks from Yahoo
-            if isinstance(furigana_result, SingleWordResultObject) and \
+            if 'subword' not in furigana_result and \
                 any(not is_kana_or_kanji(chr) for chr in yahoo_furigana):
                 print(f"Successfully processing {yahoo_furigana} \t with {yahoo_furigana}")
                 final_response_results.append(
@@ -205,7 +205,7 @@ def mark_accent(request: Request) -> dict[str, Any]:
             if ojad_moji_count == len(yahoo_furigana) and ojad_furigana == yahoo_furigana:
                 print(f"Successfully processing {ojad_furigana} \t with {yahoo_furigana}")
                 ojad_idx_cnt = tmp_ojad_idx
-                if isinstance(furigana_result, SingleWordResultObject):
+                if 'subword' not in furigana_result:
                     final_response_results.append(
                         SingleWordAccentResultObject(
                             furigana=yahoo_furigana,
@@ -214,7 +214,7 @@ def mark_accent(request: Request) -> dict[str, Any]:
                         )
                     )
                 else:
-                    yahoo_subword = furigana_result.subword
+                    yahoo_subword = furigana_result['subword']
                     final_response_results.append(
                         MultiWordAccentResultObject(
                             furigana=yahoo_furigana,
@@ -277,4 +277,4 @@ def mark_accent(request: Request) -> dict[str, Any]:
                 message=f"Non-usual error occurs: {e}"
             )
         )
-    return response.model_dump()
+    return response
