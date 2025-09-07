@@ -5,6 +5,8 @@ An API that mark accent of given query text
 import string
 from typing import Optional, List, Any
 
+import jaconv
+import neologdn
 import requests
 from fastapi import APIRouter
 from bs4 import BeautifulSoup
@@ -132,40 +134,48 @@ def get_ojad_result(query_text: str) -> List:
     phrasing_texts = soup.find_all("div", attrs={"class": "phrasing_text"})
     phrasing_subscripts = soup.find_all("div", attrs={"class": "phrasing_subscript"})
 
+    paragraph = ""
     ojad_results = []
-    for d, s in zip(phrasing_texts, phrasing_subscripts):
+    for furigana, surface in zip(phrasing_texts, phrasing_subscripts):
         # Fetch subscript text (in the first span tag, final tag is the halt sign)
-        phrase = s.find_all("span", recursive=False)
+        phrase = surface.find_all("span", recursive=False)
         sentence = ""
         for p in phrase:
             sentence += p.get_text()
+        paragraph += sentence
 
         # Fetch processed data
-        temp = d.find_all("span", recursive=False)
-        for p in temp:
+        mojis = furigana.find_all("span", recursive=False)
+        for moji in mojis:
             # Check accent mark (we don't use unvoiced)
-            accent = -1
-            if p['class'][0] == 'accent_plain':
-                accent = 0
-            elif p['class'][0] == 'accent_top':
+            accent = 0
+            if moji['class'][0] == 'accent_plain':
                 accent = 1
-            ojad_results.append({'text': p.get_text(), 'accent': accent})
-    return ojad_results
+            elif moji['class'][0] == 'accent_top':
+                accent = 2
+            ojad_results.append({'text': moji.get_text(), 'accent': accent})
+    return paragraph, ojad_results
 
 @router.post("/MarkAccent/", tags=["MarkAccent"], response_model=Response)
 def mark_accent(request: Request) -> dict[str, Any]:
     """Receive POST request, return a JSON response"""
     try:
-        query_text = request.text
+        query_text = neologdn.normalize(request.text, tilde="normalize")
         furigana_results: List = mark_furigana(Request(text=query_text))['result']
-        ojad_results = get_ojad_result(query_text)
+        ojad_surface, ojad_results = get_ojad_result(query_text)
+
+        # For debug use
+        # print(furigana_results)
+        # print('='*20)
+        # print(ojad_results)
 
         final_response_results = []
         ojad_idx_cnt = 0
         for furigana_result in furigana_results:
             yahoo_furigana = furigana_result['furigana']
+            yahoo_furigana_hira = jaconv.kata2hira(yahoo_furigana)
             yahoo_surface = furigana_result['surface']
-            accent = []
+            accents = []
 
             # If query sub-text contains non-kana and non-kanji words, we should ignore it
             # Including alphabet and punchutation and others
@@ -189,47 +199,39 @@ def mark_accent(request: Request) -> dict[str, Any]:
                 continue
 
             # Remove all mismatching prefix
-            tmp_ojad_idx = ojad_idx_cnt
-            while tmp_ojad_idx < len(ojad_results) and \
-                not yahoo_furigana.startswith(ojad_results[tmp_ojad_idx]['text']):
-                tmp_ojad_idx += 1
+            # Note that sometimes OJAD will transform katagana to hiragana, so make sure we're matching with same type
+            ojad_idx = ojad_idx_cnt
+            while ojad_idx < len(ojad_results) and \
+                not yahoo_furigana_hira.startswith(jaconv.kata2hira(ojad_results[ojad_idx]['text'])):
+                ojad_idx += 1
 
-            ojad_moji_count = 0
+            # Match the furigana from Yahoo with OJAD results
             ojad_furigana = ""
-
-            while ojad_moji_count < len(yahoo_furigana) and tmp_ojad_idx < len(ojad_results):
-                ojad_text = ojad_results[tmp_ojad_idx]['text']
-                ojad_moji_count += len(ojad_text)
+            while len(ojad_furigana) < len(yahoo_furigana) and ojad_idx < len(ojad_results):
+                ojad_text = ojad_results[ojad_idx]['text']
                 ojad_furigana += ojad_text
+                accents.append(ojad_results[ojad_idx]['accent'])
+                ojad_idx += 1
 
-                accent_value = ojad_results[tmp_ojad_idx]['accent']
-                if accent_value == 0:
-                    accent.append(AccentInfo(
-                        furigana=ojad_text,
-                        accent_marking_type=1
-                    ))
-                elif accent_value == 1:
-                    accent.append(AccentInfo(
-                        furigana=ojad_text,
-                        accent_marking_type=2
-                    ))
-                else:
-                    accent.append(AccentInfo(
-                        furigana=ojad_text,
-                        accent_marking_type=0
-                    ))
-
-                tmp_ojad_idx += 1
-
-            if ojad_moji_count == len(yahoo_furigana) and ojad_furigana == yahoo_furigana:
+            # If we successfully match the furigana from Yahoo with OJAD results
+            if len(ojad_furigana) == len(yahoo_furigana) and jaconv.kata2hira(ojad_furigana) == jaconv.kata2hira(yahoo_furigana):
                 print(f"Successfully processing {ojad_furigana} \t with {yahoo_furigana}")
-                ojad_idx_cnt = tmp_ojad_idx
+                # Build accent info list
+                accent_info_list = []
+                for idx, accent_value in enumerate(accents):
+                    accent_info_list.append(AccentInfo(
+                        furigana=yahoo_furigana[idx],
+                        accent_marking_type=accent_value
+                    ))
+                # Update ojad_idx_cnt
+                ojad_idx_cnt = ojad_idx
+                # Build final response result
                 if 'subword' not in furigana_result:
                     final_response_results.append(
                         SingleWordAccentResultObject(
                             furigana=yahoo_furigana,
                             surface=yahoo_surface,
-                            accent=accent
+                            accent=accent_info_list
                         )
                     )
                 else:
@@ -238,7 +240,7 @@ def mark_accent(request: Request) -> dict[str, Any]:
                         MultiWordAccentResultObject(
                             furigana=yahoo_furigana,
                             surface=yahoo_surface,
-                            accent=accent,
+                            accent=accent_info_list,
                             subword=yahoo_subword
                         )
                     )
