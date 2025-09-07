@@ -47,7 +47,7 @@ There are two upcomming API Interfaces
         |      status     |  int   | status code [Reference](https://developer.mozilla.org/en-US/docs/Web/HTTP/Reference/Status#server_error_responses) |
         | result  | object | An array contains marked results |
         | surface | string | The original input (partial) text |
-        | accent | int | The accent of given word, `-1` when no accent |
+        | accent | list | The accent of given word, with furigana and accent type info. 0 for no accent, 1 for plain, 2 for fall down |
         | subword | object | An array contains more details when a word contains both kanji and kana |
         | error | object | An object that describe the details of an error when occur |
         | error/code | integer | [Reference](https://www.jsonrpc.org/specification#error_object)
@@ -57,12 +57,25 @@ There are two upcomming API Interfaces
 
         ```json
         {
-            "status": "200",
+            "status": 200,
             "result": [
                 {
                     "furigana": "おかね",
                     "surface": "お金",
-                    "accent": 0,
+                    "accent": [
+                        {
+                            "furigana": "お",
+                            "accent_marking_type": 0
+                        },
+                        {
+                            "furigana": "か",
+                            "accent_marking_type": 1
+                        },
+                        {
+                            "furigana": "ね",
+                            "accent_marking_type": 1
+                        }
+                    ],
                     "subword": [
                         {
                             "furigana": "お",
@@ -77,12 +90,30 @@ There are two upcomming API Interfaces
                 {
                     "furigana": "を",
                     "surface": "を",
-                    "accent": 0
+                    "accent": [
+                        {
+                            "furigana": "を",
+                            "accent_marking_type": 1
+                        }
+                    ]
                 },
                 {
                     "furigana": "かせぐ",
                     "surface": "稼ぐ",
-                    "accent": 2,
+                    "accent": [
+                        {
+                            "furigana": "か",
+                            "accent_marking_type": 1
+                        },
+                        {
+                            "furigana": "せ",
+                            "accent_marking_type": 2
+                        },
+                        {
+                            "furigana": "ぐ",
+                            "accent_marking_type": 0
+                        }
+                    ],
                     "subword": [
                         {
                             "furigana": "かせ",
@@ -94,7 +125,8 @@ There are two upcomming API Interfaces
                         }
                     ]
                 }
-            ]
+            ],
+            "error": null
         }
         ```
 
