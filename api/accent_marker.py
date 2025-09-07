@@ -57,6 +57,15 @@ class ErrorInfo(BaseModel):
         description="The error message that describe the details of an error"
     )
 
+class AccentInfo(BaseModel):
+    """Class representing an accent information"""
+    furigana: str = Field(
+        description="The furigana of given kana and kanji"
+    )
+    accent_marking_type: int = Field(
+        description="The type of accent, including none (0), heiban (1), fall (2)"
+    )
+
 class SingleWordAccentResultObject(BaseModel):
     """Class representing a single word result object"""
     furigana: str = Field(
@@ -65,8 +74,8 @@ class SingleWordAccentResultObject(BaseModel):
     surface: str = Field(
         description="The (partial of) original query text"
     )
-    accent: int = Field(
-        description="The accent of givent word, -1 when no accent"
+    accent: List[AccentInfo] = Field(
+        description="The accent of givent word"
     )
 
 class MultiWordAccentResultObject(SingleWordAccentResultObject):
@@ -126,13 +135,13 @@ def get_ojad_result(query_text: str) -> List:
     ojad_results = []
     for d, s in zip(phrasing_texts, phrasing_subscripts):
         # Fetch subscript text (in the first span tag, final tag is the halt sign)
-        phrase = s.find_all("span", recursive= False)
+        phrase = s.find_all("span", recursive=False)
         sentence = ""
         for p in phrase:
             sentence += p.get_text()
 
         # Fetch processed data
-        temp = d.find_all("span", recursive= False)
+        temp = d.find_all("span", recursive=False)
         for p in temp:
             # Check accent mark (we don't use unvoiced)
             accent = -1
@@ -156,7 +165,7 @@ def mark_accent(request: Request) -> dict[str, Any]:
         for furigana_result in furigana_results:
             yahoo_furigana = furigana_result['furigana']
             yahoo_surface = furigana_result['surface']
-            accent = -1
+            accent = []
 
             # If query sub-text contains non-kana and non-kanji words, we should ignore it
             # Including alphabet and punchutation and others
@@ -166,6 +175,10 @@ def mark_accent(request: Request) -> dict[str, Any]:
             if 'subword' not in furigana_result and \
                 any(not is_kana_or_kanji(chr) for chr in yahoo_furigana):
                 print(f"Successfully processing {yahoo_furigana} \t with {yahoo_furigana}")
+                accent.append(AccentInfo(
+                    furigana=yahoo_surface,
+                    accent_marking_type=0
+                ))
                 final_response_results.append(
                     SingleWordAccentResultObject(
                         furigana=yahoo_furigana,
@@ -183,7 +196,6 @@ def mark_accent(request: Request) -> dict[str, Any]:
 
             ojad_moji_count = 0
             ojad_furigana = ""
-            has_zero_accent = has_one_accent = False
 
             while ojad_moji_count < len(yahoo_furigana) and tmp_ojad_idx < len(ojad_results):
                 ojad_text = ojad_results[tmp_ojad_idx]['text']
@@ -192,15 +204,22 @@ def mark_accent(request: Request) -> dict[str, Any]:
 
                 accent_value = ojad_results[tmp_ojad_idx]['accent']
                 if accent_value == 0:
-                    has_zero_accent = True
+                    accent.append(AccentInfo(
+                        furigana=ojad_text,
+                        accent_marking_type=1
+                    ))
                 elif accent_value == 1:
-                    has_one_accent = True
-                    accent = tmp_ojad_idx - ojad_idx_cnt + 1
+                    accent.append(AccentInfo(
+                        furigana=ojad_text,
+                        accent_marking_type=2
+                    ))
+                else:
+                    accent.append(AccentInfo(
+                        furigana=ojad_text,
+                        accent_marking_type=0
+                    ))
 
                 tmp_ojad_idx += 1
-
-            if has_zero_accent and not has_one_accent:
-                accent = 0
 
             if ojad_moji_count == len(yahoo_furigana) and ojad_furigana == yahoo_furigana:
                 print(f"Successfully processing {ojad_furigana} \t with {yahoo_furigana}")
