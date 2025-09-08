@@ -185,7 +185,7 @@ def mark_accent(request: Request) -> dict[str, Any]:
             if 'subword' not in furigana_result and \
                 any(not is_kana_or_kanji(chr) for chr in yahoo_furigana):
                 print(f"Successfully processing {yahoo_furigana} \t with {yahoo_furigana}")
-                accent.append(AccentInfo(
+                accents.append(AccentInfo(
                     furigana=yahoo_surface,
                     accent_marking_type=0
                 ))
@@ -193,7 +193,7 @@ def mark_accent(request: Request) -> dict[str, Any]:
                     SingleWordAccentResultObject(
                         furigana=yahoo_furigana,
                         surface=yahoo_surface,
-                        accent=accent
+                        accent=accents
                     )
                 )
                 continue
@@ -210,7 +210,7 @@ def mark_accent(request: Request) -> dict[str, Any]:
             while len(ojad_furigana) < len(yahoo_furigana) and ojad_idx < len(ojad_results):
                 ojad_text = ojad_results[ojad_idx]['text']
                 ojad_furigana += ojad_text
-                accents.append(ojad_results[ojad_idx]['accent'])
+                accents.append({'len': len(ojad_text), 'accent': ojad_results[ojad_idx]['accent']})
                 ojad_idx += 1
 
             # If we successfully match the furigana from Yahoo with OJAD results
@@ -218,11 +218,13 @@ def mark_accent(request: Request) -> dict[str, Any]:
                 print(f"Successfully processing {ojad_furigana} \t with {yahoo_furigana}")
                 # Build accent info list
                 accent_info_list = []
-                for idx, accent_value in enumerate(accents):
+                yahoo_furigana_idx = 0
+                for idx, accent in enumerate(accents):
                     accent_info_list.append(AccentInfo(
-                        furigana=yahoo_furigana[idx],
-                        accent_marking_type=accent_value
+                        furigana=yahoo_furigana[yahoo_furigana_idx:yahoo_furigana_idx+accent['len']],
+                        accent_marking_type=accent['accent']
                     ))
+                    yahoo_furigana_idx += accent['len']
                 # Update ojad_idx_cnt
                 ojad_idx_cnt = ojad_idx
                 # Build final response result
