@@ -74,7 +74,7 @@ def get_dict(url_list: list):
             furigana = [k.get_text(strip=True) for k in soup.select("span.rdng")]
 
             definitions = []
-            for sense in soup.select("table.senses"):
+            for sense in soup.select("tr.sense"):
                 pos = [k.get_text(" ", strip=True) for k in sense.select("span.pos span.abbr")]
                 meanings = [k.get_text(" ", strip=True).replace("▶", "").strip() for k in sense.select("span.glossx")]
                 definitions.append(Definition(pos=pos, meanings=meanings))
