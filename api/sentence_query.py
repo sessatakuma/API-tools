@@ -22,7 +22,7 @@ class WordResult(BaseModel):
 
 class Response(BaseModel):
     status: int = Field(default=200, description="Status code")
-    result: WordResult = Field(description="Results")
+    result: Optional[WordResult] = Field(description="Results")
     error: Optional[str] = Field(default=None, description="Error message if any")
 
 router = APIRouter()    
@@ -35,40 +35,67 @@ def sentence_query(request: Request):
         "dsrchkey": request.word, 
         "dicsel": "1" 
     }
-    response = requests.post(url, data=payload)
-    response.encoding = response.apparent_encoding
 
-    soup = BeautifulSoup(response.text, "html.parser")
+    try:
+        response = requests.post(url, data=payload, timeout=10)
+        response.encoding = response.apparent_encoding
+    except requests.exceptions.RequestException as e:
+        return Response(
+            status=500,
+            result=None,
+            error=f"Network error: {str(e)}"
+        ).model_dump()
 
-    sentences = []
-    for block in soup.select('div[style*=clear]'):
-        comments = block.find_all(string=lambda text: isinstance(text, Comment))
-        if not any(f"ent_seq={request.id}" in c for c in comments):
-            continue
-        for br in block.find_all("br"):
-            nxt = br.find_next_sibling("font")
+    try:
+        soup = BeautifulSoup(response.text, "html.parser")
 
-            if nxt and nxt.get("size") == "-1":
-                s = nxt.get_text(" ", strip=True)
+        sentences = []
+        found_block = False
+        for block in soup.select('div[style*=clear]'):
+            comments = block.find_all(string=lambda text: isinstance(text, Comment))
+            if not any(f"ent_seq={request.id}" in c for c in comments):
+                continue
+            found_block = True
+            for br in block.find_all("br"):
+                nxt = br.find_next_sibling("font")
 
-                s = re.sub(r'^\(\d+\)\s*', '', s)
-                jp, en= re.split(r'\t+|\s{2,}', s, maxsplit=1)
-                jp = jp.replace(" ","")
+                if nxt and nxt.get("size") == "-1":
+                    s = nxt.get_text(" ", strip=True)
 
-                sentences.append(WordSentence(jp=jp.strip(), en=en.strip()))
-    
-    return Response(
-        status=200,
-        result=WordResult(
-            kanji = request.word,
-            id = request.id,
-            sentence = sentences
-        ),
-        error=None
-    ).model_dump()
+                    s = re.sub(r'^\(\d+\)\s*', '', s)
+                    jp, en= re.split(r'\t+|\s{2,}', s, maxsplit=1)
+                    jp = jp.replace(" ","")
+
+                    sentences.append(WordSentence(jp=jp.strip(), en=en.strip()))
+        
+        if not found_block or not sentences:
+            return Response(
+                status=404,
+                result=None,
+                error="No results found"
+            ).model_dump()
+
+        return Response(
+            status=200,
+            result=WordResult(
+                kanji=request.word,
+                id=request.id,
+                sentence=sentences
+            ),
+            error=None
+        ).model_dump()
+
+    except Exception as e:
+        return Response(
+            status=500,
+            result=None,
+            error=f"Parse error: {str(e)}"
+        ).model_dump()
 
 
 # Test codes
 if __name__ == "__main__":
     print(sentence_query(Request(word="先生",id=1387990)))
+    print(sentence_query(Request(word="先生",id=13890)))
     print(sentence_query(Request(word="少女",id=1580290)))
+    print(sentence_query(Request(word="嗨嗨",id=1580290)))
