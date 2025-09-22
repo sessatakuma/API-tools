@@ -6,7 +6,7 @@ An API interface that provide two functionalities
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from api import accent_marker, furigana_marker, usage_query, dict_query
+from api import accent_marker, furigana_marker, usage_query, dict_query, sentence_query
 
 app = FastAPI()
 app.add_middleware(
@@ -22,4 +22,5 @@ app.include_router(accent_marker.router, prefix="/api")
 app.include_router(furigana_marker.router, prefix="/api")
 app.include_router(usage_query.router, prefix='/api')
 app.include_router(dict_query.router, prefix='/api')
+app.include_router(sentence_query.router, prefix='/api')
     
