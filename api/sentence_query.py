@@ -9,14 +9,14 @@ class Request(BaseModel):
     """Class representing a request object"""
 
     word: str = Field(description="The word to query")
-    id: int = Field(description="id")
+    id: int = Field(description="The unique ID of a word in JMdict.\nMust be obtained through DictionaryQuery to fetch example sentences.")
 
 class WordSentence(BaseModel):
     jp: str = Field(description="jp sentence")
     en: str = Field(description="en sentence")
 
 class WordResult(BaseModel):
-    kanji: str = Field(description="Kanji")
+    word: str = Field(description="Word")
     id: int = Field(description="ID")
     sentence: List[WordSentence] = Field(description="A list of sentence")
 
@@ -30,6 +30,12 @@ router = APIRouter()
 # 根據接收到的漢字及ID回傳可能的例句
 @router.post("/SentenceQuery/", tags=["SentenceQuery"], response_model=Response)
 def sentence_query(request: Request):
+    """
+    Example sentences from JMdict.
+
+    - Uses the provided `word`(kanji or furigana) and `id` from DictionaryQuery.
+    - Returns a list of sentences containing both Japanese text and their English translations.
+    """
     url = "https://www.edrdg.org/cgi-bin/wwwjdic/wwwjdic?1E"
     payload = {
         "dsrchkey": request.word, 
@@ -78,7 +84,7 @@ def sentence_query(request: Request):
         return Response(
             status=200,
             result=WordResult(
-                kanji=request.word,
+                word=request.word,
                 id=request.id,
                 sentence=sentences
             ),
@@ -96,6 +102,6 @@ def sentence_query(request: Request):
 # Test codes
 if __name__ == "__main__":
     print(sentence_query(Request(word="先生",id=1387990)))
-    print(sentence_query(Request(word="先生",id=13890)))
+    print(sentence_query(Request(word="せんせい",id=1387990)))
     print(sentence_query(Request(word="少女",id=1580290)))
     print(sentence_query(Request(word="嗨嗨",id=1580290)))
