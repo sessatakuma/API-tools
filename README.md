@@ -201,14 +201,8 @@ Currently we have 2 implemented APIs
         ```
 
 ## Build Environment
-This project currently uses `python 3.11`.
 
-```bash
-python -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-```
-If you are using [uv](https://docs.astral.sh/uv/):
+Download [uv](https://docs.astral.sh/uv/getting-started/installation/) and run this command:
 ```bash
 uv sync
 ```
