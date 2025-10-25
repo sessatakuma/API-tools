@@ -9,10 +9,9 @@ This is a repository that implement several API interfaces for Discord BOT and w
 Currently we have 2 implemented APIs
 1. Mark Accent API
 2. Mark Furigana API
-
-There are two upcomming API Interfaces
-1. Usage query API
-2. Disctionary query API
+3. Usage query API
+4. Disctionary query API
+5. Sentence Query API
 
 > [!NOTE]
 > 
@@ -202,9 +201,16 @@ There are two upcomming API Interfaces
         ```
 
 ## Build Environment
+This project currently uses `python 3.11`.
 
 ```bash
+python -m venv .venv
+source .venv/bin/activate
 pip install -r requirements.txt
+```
+If you are using [uv](https://docs.astral.sh/uv/):
+```bash
+uv sync
 ```
 
 After build the environment, you should also obtain a Yahoo API Client ID from [Yahoo Japan website](https://developer.yahoo.co.jp/sitemap/).
@@ -227,3 +233,26 @@ To check the functionality, you may send POST request with curl as follows.
 curl -X POST -H "Content-Type: application/json" -d "{\"text\": \"test\"}" 127.0.0.1:8000/api/MarkFurigana/
 ```
 
+## How to use a shared `httpx.AsyncClient`?
+If your router needs to send HTTP requests, you can follow the instructions below to use a shared `httpx.AsyncClient`to enhance performance.
+
+```python
+import httpx
+from fastapi import APIRouter, Depends
+from api.dependencies import get_http_client
+
+router = APIRouter()
+
+@router.post(
+    "/Foo/", tags=["Foo"], response_model=FooResponse
+)
+async def foo(
+    request: FooRequest, client: httpx.AsyncClient = Depends(get_http_client)
+):
+    try:
+        response = await client.post(url)
+    except httpx.TimeoutException:
+        ...
+    except httpx.HTTPError as e:
+        ...
+```
