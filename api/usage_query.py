@@ -2,10 +2,12 @@ import json
 import re
 from typing import Literal, Optional
 
+import httpx
 import jaconv
-import requests
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Depends
 from pydantic import BaseModel, Field
+
+from api.dependencies import get_http_client
 
 SITE = {
     "NLB": "https://nlb.ninjal.ac.jp",
@@ -18,7 +20,8 @@ class HeadWordRequest(BaseModel):
 
     word: str = Field(description="The word to query")
     site: Literal["NLB", "NLT"] = Field(
-        default="NLB", description="The site to query, either 'NLB' or 'NLT'. Default is 'NLB'."
+        default="NLB",
+        description="The site to query, either 'NLB' or 'NLT'. Default is 'NLB'.",
     )
 
 
@@ -27,7 +30,8 @@ class IdRequest(BaseModel):
 
     id: str = Field(description="The ID of the word")
     site: Literal["NLB", "NLT"] = Field(
-        default="NLB", description="The site to query, either 'NLB' or 'NLT'. Default is 'NLB'."
+        default="NLB",
+        description="The site to query, either 'NLB' or 'NLT'. Default is 'NLB'.",
     )
 
 
@@ -35,7 +39,9 @@ class ErrorInfo(BaseModel):
     """Class representing an error information"""
 
     code: int = Field(description="The error code that follows JSON-RPC 2.0")
-    message: str = Field(description="The error message that describe the details of an error")
+    message: str = Field(
+        description="The error message that describe the details of an error"
+    )
 
 
 class HeadWord(BaseModel):
@@ -62,39 +68,60 @@ class IdDetails(BaseModel):
     base: dict = Field(description="The base form of the word")
     subcorpus: list[dict] = Field(description="The subcorpus of the word")
     shojikei: list[dict] = Field(description="The shojikei of the word")
-    subcorpus_shojikei: list[dict] = Field(description="The distribution of shojikei by subcorpus of the word")
+    subcorpus_shojikei: list[dict] = Field(
+        description="The distribution of shojikei by subcorpus of the word"
+    )
     katuyokei: list[dict] = Field(description="The katuyokei of the word")
-    setuzoku: list[dict] = Field(description="The subsequent auxiliary verbs of the word")
-    patternfreqorder: list[dict] = Field(description="The frequency of the word in different patterns")
+    setuzoku: list[dict] = Field(
+        description="The subsequent auxiliary verbs of the word"
+    )
+    patternfreqorder: list[dict] = Field(
+        description="The frequency of the word in different patterns"
+    )
 
 
 class HeadWordResponse(BaseModel):
     """Class representing a response object for headword query"""
 
-    status: int = Field(default=200, description="Status code of response align with RFC 9110")
-    result: Optional[list[HeadWord]] = Field(description="A list contains headword results")
+    status: int = Field(
+        default=200, description="Status code of response align with RFC 9110"
+    )
+    result: Optional[list[HeadWord]] = Field(
+        description="A list contains headword results"
+    )
     error: Optional[ErrorInfo] = Field(
-        default=None, description="An object that describe the details of an error when occur"
+        default=None,
+        description="An object that describe the details of an error when occur",
     )
 
 
 class URLResponse(BaseModel):
     """Class representing a response object for URL query"""
 
-    status: int = Field(default=200, description="Status code of response align with RFC 9110")
-    result: Optional[list[URL]] = Field(description="A list contains URLs for the headwords")
+    status: int = Field(
+        default=200, description="Status code of response align with RFC 9110"
+    )
+    result: Optional[list[URL]] = Field(
+        description="A list contains URLs for the headwords"
+    )
     error: Optional[ErrorInfo] = Field(
-        default=None, description="An object that describe the details of an error when occur"
+        default=None,
+        description="An object that describe the details of an error when occur",
     )
 
 
 class IdResponse(BaseModel):
     """Class representing a response object for word details"""
 
-    status: int = Field(default=200, description="Status code of response align with RFC 9110")
-    result: Optional[IdDetails] = Field(description="Details of the word with the given ID")
+    status: int = Field(
+        default=200, description="Status code of response align with RFC 9110"
+    )
+    result: Optional[IdDetails] = Field(
+        description="Details of the word with the given ID"
+    )
     error: Optional[ErrorInfo] = Field(
-        default=None, description="An object that describe the details of an error when occur"
+        default=None,
+        description="An object that describe the details of an error when occur",
     )
 
 
@@ -117,8 +144,12 @@ def text_type(text: str) -> str | None:
         return "headword"
 
 
-@router.post("/UsageQuery/HeadWords/", tags=["UsageQuery"], response_model=HeadWordResponse)
-def get_headwords(request: HeadWordRequest):
+@router.post(
+    "/UsageQuery/HeadWords/", tags=["UsageQuery"], response_model=HeadWordResponse
+)
+async def get_headwords(
+    request: HeadWordRequest, client: httpx.AsyncClient = Depends(get_http_client)
+):
     """Get headword_list for the word."""
 
     match text_type(request.word):
@@ -151,7 +182,20 @@ def get_headwords(request: HeadWordRequest):
         "User-Agent": "Mozilla/5.0",
     }
 
-    response = requests.post(url, data=payload, headers=headers)
+    try:
+        response = await client.post(url, data=payload, headers=headers)
+    except httpx.TimeoutException:
+        return HeadWordResponse(
+            status=504,
+            result=None,
+            error=ErrorInfo(code=504, message="Connection timed out"),
+        ).model_dump()
+    except httpx.HTTPError as e:
+        return HeadWordResponse(
+            status=500,
+            result=None,
+            error=ErrorInfo(code=500, message=f"Request error: {e}"),
+        ).model_dump()
 
     if response.status_code == 200:
         try:
@@ -165,7 +209,14 @@ def get_headwords(request: HeadWordRequest):
                     yomi_display = row.get("yomi_display")
                     romaji_display = row.get("romaji_display")
                     freq = row.get("freq")
-                    if id and headword_id and headword and yomi_display and romaji_display and freq:
+                    if (
+                        id
+                        and headword_id
+                        and headword
+                        and yomi_display
+                        and romaji_display
+                        and freq
+                    ):
                         search_result = HeadWord(
                             id=id,
                             headword_id=headword_id,
@@ -182,7 +233,9 @@ def get_headwords(request: HeadWordRequest):
                 return HeadWordResponse(
                     status=404,
                     result=None,
-                    error=ErrorInfo(code=404, message="No results found for the given word"),
+                    error=ErrorInfo(
+                        code=404, message="No results found for the given word"
+                    ),
                 ).model_dump()
         except Exception as e:
             # print(f"Error parsing JSON: {e}")
@@ -196,14 +249,18 @@ def get_headwords(request: HeadWordRequest):
         return HeadWordResponse(
             status=response.status_code,
             result=None,
-            error=ErrorInfo(code=response.status_code, message=f"HTTP error {response.status_code}"),
+            error=ErrorInfo(
+                code=response.status_code, message=f"HTTP error {response.status_code}"
+            ),
         ).model_dump()
 
 
 @router.post("/UsageQuery/URL/", tags=["UsageQuery"], response_model=URLResponse)
-def get_urls(request: HeadWordRequest):
+async def get_urls(
+    request: HeadWordRequest, client: httpx.AsyncClient = Depends(get_http_client)
+):
     """Get URL for the word with the given word."""
-    response = get_headwords(request)
+    response = await get_headwords(request, client)
 
     if response["status"] != 200:
         return URLResponse(
@@ -214,17 +271,24 @@ def get_urls(request: HeadWordRequest):
 
     result = []
     for res in response["result"]:
-        result.append(URL(word=res["headword"], url=f'{SITE[request.site]}/headword/{res["headword_id"]}/'))
+        result.append(
+            URL(
+                word=res["headword"],
+                url=f"{SITE[request.site]}/headword/{res['headword_id']}/",
+            )
+        )
     # print(f"Generated URLs: {result}")
 
     return URLResponse(status=200, result=result).model_dump()
 
 
 @router.post("/UsageQuery/IdDetails/", tags=["UsageQuery"], response_model=IdResponse)
-def get_id_details(request: IdRequest):
+async def get_id_details(
+    request: IdRequest, client: httpx.AsyncClient = Depends(get_http_client)
+):
     """Get details for the word with the given ID."""
 
-    def fetch_data(mode: Literal["get", "post"], endpoint: str, target: str = ""):
+    async def fetch_data(mode: Literal["get", "post"], endpoint: str, target: str = ""):
         """Helper function to fetch and parse JSON data"""
         match mode:
             case "get":
@@ -232,14 +296,46 @@ def get_id_details(request: IdRequest):
                     "Referer": f"{SITE[request.site]}/headword/{request.id}/",
                     "User-Agent": "Mozilla/5.0",
                 }
-                response = requests.get(f"{SITE[request.site]}/{endpoint}/{request.id}/", headers=headers)
+                try:
+                    response = await client.get(
+                        f"{SITE[request.site]}/{endpoint}/{request.id}/",
+                        headers=headers,
+                    )
+                except httpx.TimeoutException:
+                    return IdResponse(
+                        status=504,
+                        result=None,
+                        error=ErrorInfo(code=504, message="Connection timed out"),
+                    )
+                except httpx.HTTPError as e:
+                    return IdResponse(
+                        status=500,
+                        result=None,
+                        error=ErrorInfo(code=500, message=f"Request error: {e}"),
+                    )
             case "post":
                 headers = {
                     "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
                     "Referer": f"{SITE[request.site]}/headword/{request.id}/",
                     "User-Agent": "Mozilla/5.0",
                 }
-                response = requests.post(f"{SITE[request.site]}/{endpoint}/{request.id}/", headers=headers)
+                try:
+                    response = await client.post(
+                        f"{SITE[request.site]}/{endpoint}/{request.id}/",
+                        headers=headers,
+                    )
+                except httpx.TimeoutException:
+                    return IdResponse(
+                        status=504,
+                        result=None,
+                        error=ErrorInfo(code=504, message="Connection timed out"),
+                    )
+                except httpx.HTTPError as e:
+                    return IdResponse(
+                        status=500,
+                        result=None,
+                        error=ErrorInfo(code=500, message=f"Request error: {e}"),
+                    )
 
         if response.status_code == 200:
             try:
@@ -252,7 +348,10 @@ def get_id_details(request: IdRequest):
                 return IdResponse(
                     status=500,
                     result=None,
-                    error=ErrorInfo(code=500, message=f"Error parsing JSON while fetching {endpoint}: {e}"),
+                    error=ErrorInfo(
+                        code=500,
+                        message=f"Error parsing JSON while fetching {endpoint}: {e}",
+                    ),
                 )
         else:
             # print(f"HTTP error {response.status_code} while fetching {endpoint}")
@@ -260,36 +359,49 @@ def get_id_details(request: IdRequest):
                 status=response.status_code,
                 result=None,
                 error=ErrorInfo(
-                    code=response.status_code, message=f"HTTP error {response.status_code} while fetching {endpoint}"
+                    code=response.status_code,
+                    message=f"HTTP error {response.status_code} while fetching {endpoint}",
                 ),
             )
 
     # IdResponse.base
-    base = fetch_data("get", "basicinfob")
+    base = await fetch_data("get", "basicinfob")
     if isinstance(base, IdResponse):
         return base.model_dump()
     # IdResponse.subcorpus
-    subcorpus = [] if request.site == "NLT" else fetch_data("get", "basicinfosc", "subcorpus")
+    subcorpus = (
+        []
+        if request.site == "NLT"
+        else await fetch_data("get", "basicinfosc", "subcorpus")
+    )
     if isinstance(subcorpus, IdResponse):
         return subcorpus.model_dump()
     # IdResponse.shojikei
-    shojikei = fetch_data("get", "basicinfosj", "shojikei")
+    shojikei = await fetch_data("get", "basicinfosj", "shojikei")
     if isinstance(shojikei, IdResponse):
         return shojikei.model_dump()
     # IdResponse.subcorpus_shojikei
-    subcorpus_shojikei = [] if request.site == "NLT" else fetch_data("post", "basicinfoss", "subcorpus")
+    subcorpus_shojikei = (
+        []
+        if request.site == "NLT"
+        else await fetch_data("post", "basicinfoss", "subcorpus")
+    )
     if isinstance(subcorpus_shojikei, IdResponse):
         return subcorpus_shojikei.model_dump()
     # IdResponse.katuyokei
-    katuyokei = [] if request.site == "NLT" else fetch_data("get", "basicinfoky", "katuyokei")
+    katuyokei = (
+        []
+        if request.site == "NLT"
+        else await fetch_data("get", "basicinfoky", "katuyokei")
+    )
     if isinstance(katuyokei, IdResponse):
         return katuyokei.model_dump()
     # IdResponse.setuzoku
-    setuzoku = fetch_data("get", "basicinfojs", "setuzoku")
+    setuzoku = await fetch_data("get", "basicinfojs", "setuzoku")
     if isinstance(setuzoku, IdResponse):
         return setuzoku.model_dump()
     # IdResponse.patternfreqorder
-    patternfreqorder = fetch_data("post", "patternfreqorder", "rows")
+    patternfreqorder = await fetch_data("post", "patternfreqorder", "rows")
     if isinstance(patternfreqorder, IdResponse):
         return patternfreqorder.model_dump()
 
