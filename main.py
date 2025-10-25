@@ -29,7 +29,7 @@ async def lifespan(app: FastAPI):
         app (FastAPI): The FastAPI application instance.
     """
     # Set up resources before the application starts
-    app.state.http_client = httpx.AsyncClient()
+    app.state.http_client = httpx.AsyncClient(timeout=10.0)
     yield
     # Clean up resources after the application stops
     await app.state.http_client.aclose()
