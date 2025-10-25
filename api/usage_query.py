@@ -2,10 +2,12 @@ import json
 import re
 from typing import Literal, Optional
 
+import httpx
 import jaconv
-import requests
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 from pydantic import BaseModel, Field
+
+from api.dependencies import get_http_client
 
 SITE = {
     "NLB": "https://nlb.ninjal.ac.jp",
@@ -145,7 +147,9 @@ def text_type(text: str) -> str | None:
 @router.post(
     "/UsageQuery/HeadWords/", tags=["UsageQuery"], response_model=HeadWordResponse
 )
-def get_headwords(request: HeadWordRequest):
+async def get_headwords(
+    request: HeadWordRequest, client: httpx.AsyncClient = Depends(get_http_client)
+):
     """Get headword_list for the word."""
 
     match text_type(request.word):
@@ -178,7 +182,20 @@ def get_headwords(request: HeadWordRequest):
         "User-Agent": "Mozilla/5.0",
     }
 
-    response = requests.post(url, data=payload, headers=headers)
+    try:
+        response = await client.post(url, data=payload, headers=headers)
+    except httpx.TimeoutException:
+        return HeadWordResponse(
+            status=504,
+            result=None,
+            error=ErrorInfo(code=504, message="Connection timed out"),
+        ).model_dump()
+    except httpx.HTTPError as e:
+        return HeadWordResponse(
+            status=500,
+            result=None,
+            error=ErrorInfo(code=500, message=f"Request error: {e}"),
+        ).model_dump()
 
     if response.status_code == 200:
         try:
@@ -239,9 +256,11 @@ def get_headwords(request: HeadWordRequest):
 
 
 @router.post("/UsageQuery/URL/", tags=["UsageQuery"], response_model=URLResponse)
-def get_urls(request: HeadWordRequest):
+async def get_urls(
+    request: HeadWordRequest, client: httpx.AsyncClient = Depends(get_http_client)
+):
     """Get URL for the word with the given word."""
-    response = get_headwords(request)
+    response = await get_headwords(request, client)
 
     if response["status"] != 200:
         return URLResponse(
@@ -264,10 +283,12 @@ def get_urls(request: HeadWordRequest):
 
 
 @router.post("/UsageQuery/IdDetails/", tags=["UsageQuery"], response_model=IdResponse)
-def get_id_details(request: IdRequest):
+async def get_id_details(
+    request: IdRequest, client: httpx.AsyncClient = Depends(get_http_client)
+):
     """Get details for the word with the given ID."""
 
-    def fetch_data(mode: Literal["get", "post"], endpoint: str, target: str = ""):
+    async def fetch_data(mode: Literal["get", "post"], endpoint: str, target: str = ""):
         """Helper function to fetch and parse JSON data"""
         match mode:
             case "get":
@@ -275,18 +296,46 @@ def get_id_details(request: IdRequest):
                     "Referer": f"{SITE[request.site]}/headword/{request.id}/",
                     "User-Agent": "Mozilla/5.0",
                 }
-                response = requests.get(
-                    f"{SITE[request.site]}/{endpoint}/{request.id}/", headers=headers
-                )
+                try:
+                    response = await client.get(
+                        f"{SITE[request.site]}/{endpoint}/{request.id}/",
+                        headers=headers,
+                    )
+                except httpx.TimeoutException:
+                    return IdResponse(
+                        status=504,
+                        result=None,
+                        error=ErrorInfo(code=504, message="Connection timed out"),
+                    )
+                except httpx.HTTPError as e:
+                    return IdResponse(
+                        status=500,
+                        result=None,
+                        error=ErrorInfo(code=500, message=f"Request error: {e}"),
+                    )
             case "post":
                 headers = {
                     "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
                     "Referer": f"{SITE[request.site]}/headword/{request.id}/",
                     "User-Agent": "Mozilla/5.0",
                 }
-                response = requests.post(
-                    f"{SITE[request.site]}/{endpoint}/{request.id}/", headers=headers
-                )
+                try:
+                    response = await client.post(
+                        f"{SITE[request.site]}/{endpoint}/{request.id}/",
+                        headers=headers,
+                    )
+                except httpx.TimeoutException:
+                    return IdResponse(
+                        status=504,
+                        result=None,
+                        error=ErrorInfo(code=504, message="Connection timed out"),
+                    )
+                except httpx.HTTPError as e:
+                    return IdResponse(
+                        status=500,
+                        result=None,
+                        error=ErrorInfo(code=500, message=f"Request error: {e}"),
+                    )
 
         if response.status_code == 200:
             try:
@@ -316,37 +365,43 @@ def get_id_details(request: IdRequest):
             )
 
     # IdResponse.base
-    base = fetch_data("get", "basicinfob")
+    base = await fetch_data("get", "basicinfob")
     if isinstance(base, IdResponse):
         return base.model_dump()
     # IdResponse.subcorpus
     subcorpus = (
-        [] if request.site == "NLT" else fetch_data("get", "basicinfosc", "subcorpus")
+        []
+        if request.site == "NLT"
+        else await fetch_data("get", "basicinfosc", "subcorpus")
     )
     if isinstance(subcorpus, IdResponse):
         return subcorpus.model_dump()
     # IdResponse.shojikei
-    shojikei = fetch_data("get", "basicinfosj", "shojikei")
+    shojikei = await fetch_data("get", "basicinfosj", "shojikei")
     if isinstance(shojikei, IdResponse):
         return shojikei.model_dump()
     # IdResponse.subcorpus_shojikei
     subcorpus_shojikei = (
-        [] if request.site == "NLT" else fetch_data("post", "basicinfoss", "subcorpus")
+        []
+        if request.site == "NLT"
+        else await fetch_data("post", "basicinfoss", "subcorpus")
     )
     if isinstance(subcorpus_shojikei, IdResponse):
         return subcorpus_shojikei.model_dump()
     # IdResponse.katuyokei
     katuyokei = (
-        [] if request.site == "NLT" else fetch_data("get", "basicinfoky", "katuyokei")
+        []
+        if request.site == "NLT"
+        else await fetch_data("get", "basicinfoky", "katuyokei")
     )
     if isinstance(katuyokei, IdResponse):
         return katuyokei.model_dump()
     # IdResponse.setuzoku
-    setuzoku = fetch_data("get", "basicinfojs", "setuzoku")
+    setuzoku = await fetch_data("get", "basicinfojs", "setuzoku")
     if isinstance(setuzoku, IdResponse):
         return setuzoku.model_dump()
     # IdResponse.patternfreqorder
-    patternfreqorder = fetch_data("post", "patternfreqorder", "rows")
+    patternfreqorder = await fetch_data("post", "patternfreqorder", "rows")
     if isinstance(patternfreqorder, IdResponse):
         return patternfreqorder.model_dump()
 
