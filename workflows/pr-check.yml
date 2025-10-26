@@ -1,0 +1,66 @@
+name: 'PR Check'
+on:
+  pull_request:
+    types: [opened, edited, synchronize]
+    branches: [main]
+
+jobs:
+  pr-check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install uv
+        run: curl -LsSf https://astral.sh/uv/install.sh | sh
+
+      - name: Install dependencies
+        run: |
+          export PATH="$HOME/.cargo/bin:$PATH"
+          uv sync
+          uv pip install ruff mypy pyyaml toml
+
+      - name: Check for merge conflicts
+        run: |
+          ! grep -r -E '^(<<<<<<<|=======|>>>>>>>)' --exclude-dir={.git,.venv,node_modules,__pycache__} .
+
+      - name: Check YAML syntax
+        run: |
+          for file in $(find . -type f \( -name "*.yml" -o -name "*.yaml" \) -not -path "./.git/*" -not -path "./.venv/*"); do
+            echo "Checking: $file"
+            uv run python -c "import yaml; yaml.safe_load(open('$file'))"
+          done
+
+      - name: Check JSON syntax
+        run: |
+          for file in $(find . -type f -name "*.json" -not -path "./.git/*" -not -path "./.venv/*"); do
+            echo "Checking: $file"
+            uv run python -c "import json; json.load(open('$file'))"
+          done
+
+      - name: Check TOML syntax
+        run: |
+          for file in $(find . -type f -name "*.toml" -not -path "./.git/*" -not -path "./.venv/*"); do
+            echo "Checking: $file"
+            uv run python -c "import toml; toml.load(open('$file'))"
+          done
+
+      - name: Check Ruff Formatter
+        run: |
+          export PATH="$HOME/.cargo/bin:$PATH"
+          uv run ruff format . --check
+
+      - name: Check Ruff Linter
+        run: |
+          export PATH="$HOME/.cargo/bin:$PATH"
+          uv run ruff check .
+
+      - name: Check Mypy
+        run: |
+          export PATH="$HOME/.cargo/bin:$PATH"
+          uv run mypy .
