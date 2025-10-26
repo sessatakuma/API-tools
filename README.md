@@ -1,7 +1,7 @@
 # API-tools
 
 > [!WARNING]
-> 
+>
 > This project is still under development!
 
 This is a repository that implement several API interfaces for Discord BOT and web interface.
@@ -14,7 +14,7 @@ Currently we have 2 implemented APIs
 5. Sentence Query API
 
 > [!NOTE]
-> 
+>
 > The following document is only for developer, we will use Swagger UI to generate official API document.
 
 1. Mark Accent
@@ -24,7 +24,7 @@ Currently we have 2 implemented APIs
 
         `https://{TODO}/api/MarkAccent/`
     - **Request Parameter (POST)**
-        
+
         > Note that we only accept POST request
 
         |    Parameter    |  Type  |  Explanation |
@@ -40,7 +40,7 @@ Currently we have 2 implemented APIs
         ```
 
     - **Respond Parameter**
-        
+
         |    Parameter    |  Type  |  Explanation |
         | --------------- | ------ | ------------ |
         |      status     |  int   | status code [Reference](https://developer.mozilla.org/en-US/docs/Web/HTTP/Reference/Status#server_error_responses) |
@@ -136,7 +136,7 @@ Currently we have 2 implemented APIs
 
         `https://{TODO}/api/MarkFurigana/`
     - **Request Parameter (POST)**
-        
+
         > Note that we only accept POST request
 
         |    Parameter    |  Type  |  Explanation |
@@ -150,7 +150,7 @@ Currently we have 2 implemented APIs
             "text": "漢字かな交じり文"
         }
         ```
-    
+
     - **Respond Parameter**
 
         |    Parameter    |  Type  |  Explanation |
@@ -250,3 +250,14 @@ async def foo(
     except httpx.HTTPError as e:
         ...
 ```
+
+
+## Check the project
+Since the package of ruff and mypy are already installed in dev group,
+one can directly execute the following command to format and check the project:
+```bash
+ruff format . --check # Check format
+ruff check .          # Check linter
+mypy .                # Check type
+```
+For more detailed setting with IDE (e.g. VScode), please refer to our manul.
