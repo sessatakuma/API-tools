@@ -1,13 +1,12 @@
 """
 An API that mark furigana of given query text
 """
-import asyncio
 
-import aiohttp
-import osc
+import os
 from typing import Optional, List
 from fastapi import APIRouter
 from pydantic import BaseModel, Field
+import requests
 import json
 import yaml
 
@@ -78,7 +77,7 @@ except (FileNotFoundError, KeyError, yaml.YAMLError) as e:
     raise RuntimeError(f"Failed to load Yahoo_API_key: {e}")
 
 @router.post("/MarkFurigana/", tags=["MarkFurigana"], response_model=Response)
-async def mark_furigana(request: Request):
+def mark_furigana(request: Request):
     """Receive POST request, return a JSON response"""
     query_text = request.text
 
@@ -100,42 +99,40 @@ async def mark_furigana(request: Request):
 
     # call API
     try:
-        async with aiohttp.ClientSession() as session:
-            async with session.post(url, headers=headers, json=data, timeout=aiohttp.ClientTimeout(total=5)) as resp:
-                if resp.status != 200:
-                    return Response(
-                        status=resp.status,
-                        result=[],
-                        error=ErrorInfo(code=resp.status, message=f"HTTP error: {resp.reason}")
-                    ).model_dump()
-
-                try:
-                    result = await resp.json()
-                except aiohttp.ContentTypeError:
-                    text = await resp.text()
-                    return Response(
-                        status=502,
-                        result=[],
-                        error=ErrorInfo(code=502, message=f"Invalid JSON response: {text[:200]}")
-                    ).model_dump()
-
-    except asyncio.TimeoutError:
+        response = requests.post(url, headers=headers, data=json.dumps(data), timeout=5)
+        response.raise_for_status()
+    except requests.exceptions.Timeout:
         return Response(
             status=504,
             result=[],
-            error=ErrorInfo(code=504, message="Request to Yahoo API timed out"),
+            error=ErrorInfo(code=504, message="Request to Yahoo API timed out")
         ).model_dump()
-    except aiohttp.ClientConnectionError:
+    except requests.exceptions.ConnectionError:
         return Response(
             status=503,
             result=[],
-            error=ErrorInfo(code=503, message="Failed to connect to Yahoo API"),
+            error=ErrorInfo(code=503, message="Failed to connect to Yahoo API")
+        ).model_dump()
+    except requests.exceptions.HTTPError as http_err:
+        return Response(
+            status=response.status_code,
+            result=[],
+            error=ErrorInfo(code=response.status_code, message=f"HTTP error occurred: {http_err}")
         ).model_dump()
     except Exception as e:
         return Response(
             status=500,
             result=[],
-            error=ErrorInfo(code=500, message=f"Unexpected error: {str(e)}"),
+            error=ErrorInfo(code=500, message=f"Unexpected error: {str(e)}")
+        ).model_dump()
+
+    try:
+        result = response.json()
+    except json.JSONDecodeError:
+        return Response(
+            status=502,
+            result=[],
+            error=ErrorInfo(code=502, message="Invalid JSON response from Yahoo API")
         ).model_dump()
 
     if not isinstance(result, dict) or "result" not in result or "word" not in result["result"]:
