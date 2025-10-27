@@ -23,7 +23,6 @@ jobs:
         run: |
           export PATH="$HOME/.cargo/bin:$PATH"
           uv sync
-          uv pip install ruff mypy pyyaml toml
 
       - name: Check for merge conflicts
         run: |
