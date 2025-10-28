@@ -1,6 +1,6 @@
 import json
 import re
-from typing import Literal, Optional
+from typing import Any, Literal, Optional
 
 import httpx
 import jaconv
@@ -65,17 +65,17 @@ class URL(BaseModel):
 class IdDetails(BaseModel):
     """Class representing details of a word"""
 
-    base: dict = Field(description="The base form of the word")
-    subcorpus: list[dict] = Field(description="The subcorpus of the word")
-    shojikei: list[dict] = Field(description="The shojikei of the word")
-    subcorpus_shojikei: list[dict] = Field(
+    base: dict[str, str] = Field(description="The base form of the word")
+    subcorpus: list[dict[str, str]] = Field(description="The subcorpus of the word")
+    shojikei: list[dict[str, str]] = Field(description="The shojikei of the word")
+    subcorpus_shojikei: list[dict[str, str]] = Field(
         description="The distribution of shojikei by subcorpus of the word"
     )
-    katuyokei: list[dict] = Field(description="The katuyokei of the word")
-    setuzoku: list[dict] = Field(
+    katuyokei: list[dict[str, str]] = Field(description="The katuyokei of the word")
+    setuzoku: list[dict[str, str]] = Field(
         description="The subsequent auxiliary verbs of the word"
     )
-    patternfreqorder: list[dict] = Field(
+    patternfreqorder: list[dict[str, str]] = Field(
         description="The frequency of the word in different patterns"
     )
 
@@ -149,7 +149,7 @@ def text_type(text: str) -> str | None:
 )
 async def get_headwords(
     request: HeadWordRequest, client: httpx.AsyncClient = Depends(get_http_client)
-):
+) -> dict[str, Any]:
     """Get headword_list for the word."""
 
     match text_type(request.word):
@@ -258,7 +258,7 @@ async def get_headwords(
 @router.post("/UsageQuery/URL/", tags=["UsageQuery"], response_model=URLResponse)
 async def get_urls(
     request: HeadWordRequest, client: httpx.AsyncClient = Depends(get_http_client)
-):
+) -> dict[str, Any]:
     """Get URL for the word with the given word."""
     response = await get_headwords(request, client)
 
@@ -285,10 +285,12 @@ async def get_urls(
 @router.post("/UsageQuery/IdDetails/", tags=["UsageQuery"], response_model=IdResponse)
 async def get_id_details(
     request: IdRequest, client: httpx.AsyncClient = Depends(get_http_client)
-):
+) -> dict[str, Any]:
     """Get details for the word with the given ID."""
 
-    async def fetch_data(mode: Literal["get", "post"], endpoint: str, target: str = ""):
+    async def fetch_data(
+        mode: Literal["get", "post"], endpoint: str, target: str = ""
+    ) -> IdResponse | Any:
         """Helper function to fetch and parse JSON data"""
         match mode:
             case "get":
@@ -361,7 +363,7 @@ async def get_id_details(
                 error=ErrorInfo(
                     code=response.status_code,
                     message=(
-                        f"HTTP error {response.status_code} while fetching {endpoint}",
+                        f"HTTP error {response.status_code} while fetching {endpoint}"
                     ),
                 ),
             )
