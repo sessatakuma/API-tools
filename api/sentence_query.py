@@ -1,9 +1,11 @@
-import requests
-from fastapi import APIRouter
+import asyncio
+import httpx
+from fastapi import APIRouter, Depends
 from pydantic import BaseModel, Field
 from bs4 import BeautifulSoup, Comment
 from typing import List, Optional
 import re
+from api.dependencies import get_http_client
 
 class Request(BaseModel):
     """Class representing a request object"""
@@ -29,7 +31,7 @@ router = APIRouter()
 
 # 根據接收到的漢字及ID回傳可能的例句
 @router.post("/SentenceQuery/", tags=["SentenceQuery"], response_model=Response)
-def sentence_query(request: Request):
+async def sentence_query(request: Request, client: httpx.AsyncClient = Depends(get_http_client)):
     """
     Example sentences from JMdict.
 
@@ -43,9 +45,9 @@ def sentence_query(request: Request):
     }
 
     try:
-        response = requests.post(url, data=payload, timeout=10)
-        response.encoding = response.apparent_encoding
-    except requests.exceptions.RequestException as e:
+        response = await client.post(url, data=payload)
+        response.encoding = response.charset_encoding or "utf-8"
+    except httpx.RequestError as e:
         return Response(
             status=500,
             result=None,
@@ -101,7 +103,11 @@ def sentence_query(request: Request):
 
 # Test codes
 if __name__ == "__main__":
-    print(sentence_query(Request(word="先生",id=1387990)))
-    print(sentence_query(Request(word="せんせい",id=1387990)))
-    print(sentence_query(Request(word="少女",id=1580290)))
-    print(sentence_query(Request(word="嗨嗨",id=1580290)))
+    async def test():
+        async with httpx.AsyncClient() as client:
+            print(await sentence_query(Request(word="先生", id=1387990), client))
+            print(await sentence_query(Request(word="せんせい", id=1387990), client))
+            print(await sentence_query(Request(word="少女", id=1580290), client))
+            print(await sentence_query(Request(word="嗨嗨", id=1580290), client))
+
+    asyncio.run(test())
