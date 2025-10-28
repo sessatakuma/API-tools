@@ -360,7 +360,9 @@ async def get_id_details(
                 result=None,
                 error=ErrorInfo(
                     code=response.status_code,
-                    message=f"HTTP error {response.status_code} while fetching {endpoint}",
+                    message=(
+                        f"HTTP error {response.status_code} while fetching {endpoint}",
+                    ),
                 ),
             )
 
