@@ -65,6 +65,7 @@ class URL(BaseModel):
 class IdDetails(BaseModel):
     """Class representing details of a word"""
 
+<<<<<<< HEAD
     base: dict[str, Any] = Field(description="The base form of the word")
     subcorpus: list[dict[str, Any]] = Field(description="The subcorpus of the word")
     shojikei: list[dict[str, Any]] = Field(description="The shojikei of the word")
@@ -76,6 +77,19 @@ class IdDetails(BaseModel):
         description="The subsequent auxiliary verbs of the word"
     )
     patternfreqorder: list[dict[str, Any]] = Field(
+=======
+    base: dict[str, str] = Field(description="The base form of the word")
+    subcorpus: list[dict[str, str]] = Field(description="The subcorpus of the word")
+    shojikei: list[dict[str, str]] = Field(description="The shojikei of the word")
+    subcorpus_shojikei: list[dict[str, str]] = Field(
+        description="The distribution of shojikei by subcorpus of the word"
+    )
+    katuyokei: list[dict[str, str]] = Field(description="The katuyokei of the word")
+    setuzoku: list[dict[str, str]] = Field(
+        description="The subsequent auxiliary verbs of the word"
+    )
+    patternfreqorder: list[dict[str, str]] = Field(
+>>>>>>> f7358c5 (refactor: enhance type hints for mypy and fit ruff format (#25))
         description="The frequency of the word in different patterns"
     )
 
@@ -150,7 +164,11 @@ def text_type(text: str) -> str | None:
 async def get_headwords(
     request: HeadWordRequest, client: httpx.AsyncClient = Depends(get_http_client)
 ) -> dict[str, Any]:
+<<<<<<< HEAD
     """Get the lists of information of headwords with the given word."""
+=======
+    """Get headword_list for the word."""
+>>>>>>> f7358c5 (refactor: enhance type hints for mypy and fit ruff format (#25))
 
     match text_type(request.word):
         case "yomi":
@@ -259,7 +277,11 @@ async def get_headwords(
 async def get_urls(
     request: HeadWordRequest, client: httpx.AsyncClient = Depends(get_http_client)
 ) -> dict[str, Any]:
+<<<<<<< HEAD
     """Get the URLs of words with the given word."""
+=======
+    """Get URL for the word with the given word."""
+>>>>>>> f7358c5 (refactor: enhance type hints for mypy and fit ruff format (#25))
     response = await get_headwords(request, client)
 
     if response["status"] != 200:
@@ -286,7 +308,11 @@ async def get_urls(
 async def get_id_details(
     request: IdRequest, client: httpx.AsyncClient = Depends(get_http_client)
 ) -> dict[str, Any]:
+<<<<<<< HEAD
     """Get the details of the given headword ID."""
+=======
+    """Get details for the word with the given ID."""
+>>>>>>> f7358c5 (refactor: enhance type hints for mypy and fit ruff format (#25))
 
     async def fetch_data(
         mode: Literal["get", "post"], endpoint: str, target: str = ""
