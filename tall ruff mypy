@@ -1,0 +1,267 @@
+[33mcommit 4d03001e21b65bd836cf00e9907b13c9488823a2[m[33m ([m[1;36mHEAD[m[33m -> [m[1;32mfurigana-marker-api[m[33m, [m[1;31morigin/furigana-marker-api[m[33m)[m
+Author: minto <chrischris911226@gmail.com>
+Date:   Mon Oct 27 15:47:55 2025 +0800
+
+    perf: add aiohttp and asyncio
+
+[33mcommit 7e42162294ee3586fd1f6fa3de14ea690cdbaa22[m
+Author: WU, KUAN-TING <92087101+torrid-fish@users.noreply.github.com>
+Date:   Sun Oct 26 19:51:25 2025 +0800
+
+    feat: add PR check workflow for CI/CD (#17)
+
+[33mcommit 3525fd6ed5d8ae0be9756c1f774142a57326569b[m
+Author: Wei De Chien <72686306+wade00754@users.noreply.github.com>
+Date:   Sun Oct 26 13:53:28 2025 +0800
+
+    build: update `uv.lock` (#16)
+
+[33mcommit 27969998fc28fe1399e64814e45a85d3117898b7[m
+Author: Wei De Chien <72686306+wade00754@users.noreply.github.com>
+Date:   Sun Oct 26 00:19:03 2025 +0800
+
+    perf: move to uv, add sharing httpx client and refactor `usage_query` to async (#15)
+    
+    * build(requirements): update dependencies and add uv
+    
+    Change `aiohttp` to `httpx`
+    
+    Add `pyproject.toml` and `uv.lock` for `uv`.
+    
+    * chore: update `CODEOWNERS`
+    
+    * refactor(main): add doc strings and format with ruff
+    
+    * feat: add `lifespan` and `get_http_client` fuctions
+    
+    * style(usage_query): format with ruff
+    
+    * fix(lifespan): set timeout for `httpx.AsyncClient` to 10 seconds
+    
+    * perf: refactor `get_headwords`, `get_urls`, and `get_id_details` to use `httpx.AsyncClient` for asynchronous requests
+    
+    * docs: update README to enhance setup instructions
+    
+    * build: remove `requirements.txt` and update python version in `pyproject.toml`
+
+[33mcommit bac9fb254c29a6e86b9b54a75369df7f5030b336[m
+Author: Wei De Chien <72686306+wade00754@users.noreply.github.com>
+Date:   Sat Oct 25 13:22:17 2025 +0800
+
+    chore: add pr template and `CODEOWNERS` #14
+    
+    chore: add pr template and `CODEOWNERS`
+
+[33mcommit e39de1ec77f9e955e45e371fb1bf781a64939ca5[m
+Author: Wei De Chien <72686306+wade00754@users.noreply.github.com>
+Date:   Sun Oct 19 20:16:14 2025 +0800
+
+    build(requirements)!: update dependencies for the upcoming asynchronous fix (#12)
+    
+    * build(requirements)!: keep packages that are being used only
+    
+    Comment out unused packages with two "#" and dependencies of packages
+    that are being used with one "#".
+    
+    BREAKING CHANGE: remove `httptools`, `python-dotenv`, `uvloop`,
+    `watchfiles`, and `websockets` from `requirements.txt`
+    
+    * build(requirements): add `aiohttp` for upcoming asynchronous fix
+
+[33mcommit 9b46c94c891d1be775fa2f15c9dda37b0024a012[m
+Author: Franky_Hsiao <franky20030725@gmail.com>
+Date:   Tue Sep 23 18:47:55 2025 +0800
+
+    docs: Improve function documentation
+
+[33mcommit 66cf66bfc99c94494da54c056d64f3f0ff804bcb[m
+Author: Koios <ken1357924681010@gmail.com>
+Date:   Mon Sep 22 14:32:21 2025 +0800
+
+    fix: Adding SentenceQuery into api interface
+
+[33mcommit b8092f768ec45905761534ee4e643fb6b364282c[m
+Author: Franky_Hsiao <franky20030725@gmail.com>
+Date:   Fri Sep 19 10:11:12 2025 +0800
+
+    fix: Fix parsing error on line 77 (soup.select tr.sense)
+
+[33mcommit 56aca6e0d2b88c394ad3990fbdfc99befd613495[m
+Author: Franky_Hsiao <franky20030725@gmail.com>
+Date:   Fri Sep 19 10:04:46 2025 +0800
+
+    feat: Add error code response
+
+[33mcommit 142025b790918e3fc5cd5299c89237eb45605c99[m
+Author: Franky_Hsiao <franky20030725@gmail.com>
+Date:   Fri Sep 19 00:45:21 2025 +0800
+
+    feat: Add basic API functionality (sentence_query + dict_query)
+
+[33mcommit ac34d1c4526de5f6fc470b4c28b8a680018b273e[m
+Author: Koios <ken1357924681010@gmail.com>
+Date:   Mon Sep 8 14:41:39 2025 +0800
+
+    [Fix] resolve punctutation errors
+
+[33mcommit 3271f66173a6ae876511dfaf3c10ccd29b2c5cd9[m
+Author: Koios <ken1357924681010@gmail.com>
+Date:   Sun Sep 7 21:17:43 2025 +0800
+
+    Fix OJAD kata to hira issue
+
+[33mcommit fa0f5b97ed8b302aa7c5bff646de83c462f4237d[m
+Author: Koios <ken1357924681010@gmail.com>
+Date:   Sun Sep 7 15:45:16 2025 +0800
+
+    Modify to fit the new API response norm
+
+[33mcommit 5c91f0aa67c44b7b6eb001902a693132377e6ed9[m
+Author: Koios <ken1357924681010@gmail.com>
+Date:   Thu Sep 4 23:22:49 2025 +0800
+
+    Fix not responding with subword bug
+
+[33mcommit d042ddd89a75df9a7d49e5253cd6004c50a3adfa[m
+Author: Wei De Chien <wade00754@gmail.com>
+Date:   Sat Aug 2 17:00:47 2025 +0800
+
+    build: deploy to Heroku
+
+[33mcommit 63f54a230fb861cafe05ef38d231c4d4a44cce78[m
+Author: Koios <ken1357924681010@gmail.com>
+Date:   Fri Jul 25 01:43:42 2025 +0800
+
+    fix: Escape symbols properly and add exception control
+
+[33mcommit c457243b5c5dfee2a574bfef187ac14644f04455[m
+Author: Koios <ken1357924681010@gmail.com>
+Date:   Mon Jul 21 15:44:34 2025 +0800
+
+    Add error handling
+
+[33mcommit 26b769d901819a8f02e4742b988818a61e019994[m
+Author: Koios <ken1357924681010@gmail.com>
+Date:   Sat Jul 19 18:27:25 2025 +0800
+
+    Send query to OJAD without filtering
+
+[33mcommit 2ae5dc96198c7dd9aa689dc100571805e7ccd15b[m
+Author: Wei De Chien <wade00754@gmail.com>
+Date:   Mon Jul 21 22:47:49 2025 +0800
+
+    Add 'word' in URLResponse
+
+[33mcommit 06e501f56d3b96a5a15d0d78ab05b57ee8c0a4e9[m
+Author: Koios <ken1357924681010@gmail.com>
+Date:   Mon Jul 21 15:48:14 2025 +0800
+
+    Solve CORS issue
+
+[33mcommit 5f3e09ddab07e485794dc9a4b3a1235b73f7dc8a[m
+Author: Koios <ken1357924681010@gmail.com>
+Date:   Mon Jul 14 16:23:07 2025 +0800
+
+    Add dict query into router
+
+[33mcommit 2c29853c9533a7845a48c6e3b10723c5b839fb11[m
+Author: Wei De Chien <wade00754@gmail.com>
+Date:   Mon Jul 14 00:53:45 2025 +0800
+
+    Simply put, it returns the query URL.
+
+[33mcommit 91ebf0b0e67a9e8c36f99f453ff352b774ae48b5[m
+Author: Koios <ken1357924681010@gmail.com>
+Date:   Fri Jul 4 14:38:14 2025 +0900
+
+    Add render.yaml for deploy on render
+
+[33mcommit 0ec45b72d863329ae90f37d7f5660686d58ed83c[m
+Author: Koios <ken1357924681010@gmail.com>
+Date:   Fri Jul 4 14:10:12 2025 +0900
+
+    Add vercel.json for deploy on vercel
+
+[33mcommit f8c46a991ca449f45c4716813be7148d610a0ef2[m
+Author: Wei De Chien <wade00754@gmail.com>
+Date:   Sun Jul 13 14:47:43 2025 +0800
+
+    Update requirements
+    
+    Add word not found error handling
+
+[33mcommit a62f49731ae29055fa889766ec48b720cdf67532[m
+Author: Wei De Chien <wade00754@gmail.com>
+Date:   Sun Jul 13 01:32:02 2025 +0800
+
+    Add get URL api
+
+[33mcommit b45597e4b7518be9d5d064ae75ae36603b6a9526[m
+Author: Wei De Chien <wade00754@gmail.com>
+Date:   Sun Jul 13 01:11:59 2025 +0800
+
+    Refactors API to separate headword search and ID details endpoints
+    
+    Renames classes and functions to better reflect their specific purposes
+    
+    Improves error handling with proper HTTP status codes and structured error responses.
+
+[33mcommit 30b5ef69b1ef9d628ce18945216a96e93ebc7461[m
+Author: Wei De Chien <wade00754@gmail.com>
+Date:   Sat Jul 12 22:22:03 2025 +0800
+
+    Add new api that can let users to get search result first
+
+[33mcommit 91f90bc62587bc0babc11549c52d9364ab56faf0[m
+Author: Wei De Chien <wade00754@gmail.com>
+Date:   Sat Jul 12 18:05:41 2025 +0800
+
+    Add test codes for NLT
+
+[33mcommit e5301e2e970555b6e47ee65e0ae61ac55dc78fae[m
+Author: Wei De Chien <wade00754@gmail.com>
+Date:   Sat Jul 12 17:55:53 2025 +0800
+
+    Update get_id() to support more searching ways
+
+[33mcommit 1efeb9658b66c2e6bbaeb865b1107e1b92f3787e[m
+Author: Wei De Chien <wade00754@gmail.com>
+Date:   Fri Jul 11 00:17:04 2025 +0800
+
+    Add function that can get "headword_id" of searching words, fix nlb_search() url
+
+[33mcommit 1401dade08af65622efbc9ed2fa260a26140a64d[m
+Author: Koios <ken1357924681010@gmail.com>
+Date:   Fri Jul 4 13:32:26 2025 +0900
+
+    Use Router instead of APP, add router into main
+
+[33mcommit e185e88a76710543a002ae1c55fa3894f46d43b2[m
+Author: Koios <ken1357924681010@gmail.com>
+Date:   Fri Jul 4 13:29:57 2025 +0900
+
+    Copy usage_query.py
+
+[33mcommit 9c5c309d103c6a6ec719b44642c49a7f733f0347[m
+Author: minto <chrischris911226@gmail.com>
+Date:   Tue Jul 22 12:17:42 2025 +0900
+
+    add error handle for
+
+[33mcommit 74b9357ddceed8750368507477831ed6e0b05363[m
+Author: minto <chrischris911226@gmail.com>
+Date:   Tue Jul 8 20:54:05 2025 +0900
+
+    add return format error
+
+[33mcommit e1c108d9f1cc95418a7f1600acf225bbc715ce1c[m
+Author: Koios <ken1357924681010@gmail.com>
+Date:   Fri Jul 4 14:17:36 2025 +0900
+
+    Read API key from environment var if existst
+
+[33mcommit ef2ba75dd9978d7ec54b3d412385669fed69acfc[m
+Author: Koios <ken1357924681010@gmail.com>
+Date:   Fri Jul 4 13:27:50 2025 +0900
+
+    First Commit

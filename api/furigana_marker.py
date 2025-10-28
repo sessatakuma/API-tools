@@ -126,4 +126,3 @@ def mark_furigana(request: Request):
         status=200,
         result=parsed_result
     ).model_dump()
-
