@@ -26,9 +26,9 @@ class HeadWordRequest(BaseModel):
 
 
 class IdRequest(BaseModel):
-    """Class representing a request object for ID"""
+    """Class representing a request object for headword ID"""
 
-    id: str = Field(description="The ID of the word")
+    headword_id: str = Field(description="The headword ID of the word")
     site: Literal["NLB", "NLT"] = Field(
         default="NLB",
         description="The site to query, either 'NLB' or 'NLT'. Default is 'NLB'.",
@@ -117,7 +117,7 @@ class IdResponse(BaseModel):
         default=200, description="Status code of response align with RFC 9110"
     )
     result: Optional[IdDetails] = Field(
-        description="Details of the word with the given ID"
+        description="Details of the word with the given headword ID"
     )
     error: Optional[ErrorInfo] = Field(
         default=None,
@@ -150,7 +150,7 @@ def text_type(text: str) -> str | None:
 async def get_headwords(
     request: HeadWordRequest, client: httpx.AsyncClient = Depends(get_http_client)
 ) -> dict[str, Any]:
-    """Get headword_list for the word."""
+    """Get the lists of information of headwords with the given word."""
 
     match text_type(request.word):
         case "yomi":
@@ -259,7 +259,7 @@ async def get_headwords(
 async def get_urls(
     request: HeadWordRequest, client: httpx.AsyncClient = Depends(get_http_client)
 ) -> dict[str, Any]:
-    """Get URL for the word with the given word."""
+    """Get the URLs of words with the given word."""
     response = await get_headwords(request, client)
 
     if response["status"] != 200:
@@ -286,7 +286,7 @@ async def get_urls(
 async def get_id_details(
     request: IdRequest, client: httpx.AsyncClient = Depends(get_http_client)
 ) -> dict[str, Any]:
-    """Get details for the word with the given ID."""
+    """Get the details of the given headword ID."""
 
     async def fetch_data(
         mode: Literal["get", "post"], endpoint: str, target: str = ""
@@ -295,12 +295,12 @@ async def get_id_details(
         match mode:
             case "get":
                 headers = {
-                    "Referer": f"{SITE[request.site]}/headword/{request.id}/",
+                    "Referer": f"{SITE[request.site]}/headword/{request.headword_id}/",
                     "User-Agent": "Mozilla/5.0",
                 }
                 try:
                     response = await client.get(
-                        f"{SITE[request.site]}/{endpoint}/{request.id}/",
+                        f"{SITE[request.site]}/{endpoint}/{request.headword_id}/",
                         headers=headers,
                     )
                 except httpx.TimeoutException:
@@ -318,12 +318,12 @@ async def get_id_details(
             case "post":
                 headers = {
                     "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
-                    "Referer": f"{SITE[request.site]}/headword/{request.id}/",
+                    "Referer": f"{SITE[request.site]}/headword/{request.headword_id}/",
                     "User-Agent": "Mozilla/5.0",
                 }
                 try:
                     response = await client.post(
-                        f"{SITE[request.site]}/{endpoint}/{request.id}/",
+                        f"{SITE[request.site]}/{endpoint}/{request.headword_id}/",
                         headers=headers,
                     )
                 except httpx.TimeoutException:
