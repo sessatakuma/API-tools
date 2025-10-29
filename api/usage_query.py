@@ -201,7 +201,7 @@ async def get_headwords(
         try:
             data = response.json()
             result = []
-            if data.get("rows") and len(data["rows"]) > 0:
+            if data.get("rows") is not None and len(data["rows"]) > 0:
                 for row in data["rows"]:
                     id = row.get("id")
                     headword_id = row.get("headword_id")
@@ -342,7 +342,7 @@ async def get_id_details(
         if response.status_code == 200:
             try:
                 data = response.json()
-                ret = data[target] if target and data.get(target) else data
+                ret = data[target] if target and data.get(target) is not None else data
                 # print(f"Fetched {target}: {ret}")
                 return ret
             except Exception as e:
