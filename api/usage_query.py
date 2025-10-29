@@ -65,17 +65,17 @@ class URL(BaseModel):
 class IdDetails(BaseModel):
     """Class representing details of a word"""
 
-    base: dict[str, str] = Field(description="The base form of the word")
-    subcorpus: list[dict[str, str]] = Field(description="The subcorpus of the word")
-    shojikei: list[dict[str, str]] = Field(description="The shojikei of the word")
-    subcorpus_shojikei: list[dict[str, str]] = Field(
+    base: dict[str, Any] = Field(description="The base form of the word")
+    subcorpus: list[dict[str, Any]] = Field(description="The subcorpus of the word")
+    shojikei: list[dict[str, Any]] = Field(description="The shojikei of the word")
+    subcorpus_shojikei: list[dict[str, Any]] = Field(
         description="The distribution of shojikei by subcorpus of the word"
     )
-    katuyokei: list[dict[str, str]] = Field(description="The katuyokei of the word")
-    setuzoku: list[dict[str, str]] = Field(
+    katuyokei: list[dict[str, Any]] = Field(description="The katuyokei of the word")
+    setuzoku: list[dict[str, Any]] = Field(
         description="The subsequent auxiliary verbs of the word"
     )
-    patternfreqorder: list[dict[str, str]] = Field(
+    patternfreqorder: list[dict[str, Any]] = Field(
         description="The frequency of the word in different patterns"
     )
 
