@@ -4,7 +4,7 @@ An API that mark furigana of given query text
 
 import os
 from typing import Optional, List
-from fastapi import APIRouter
+from fastapi import APIRouter # type: ignore
 from pydantic import BaseModel, Field
 import requests
 import json
@@ -100,7 +100,7 @@ def mark_furigana(request: Request):
 
     # 輸出結果
     words = result["result"]["word"]
-    parsed_result=[]
+    parsed_result: list[SingleWordResultObject | MultiWordResultObject] = []
 
     for word in words:
         if "subword" in word:
