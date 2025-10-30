@@ -26,7 +26,7 @@ indent-style = "space"
 line-length = 88
 
 [tool.ruff.lint]
-select = ["E", "F", "N"]
+select = ["E", "F", "N", "I"]
 
 [tool.mypy]
 strict = true
