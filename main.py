@@ -8,6 +8,7 @@ An API interface that provide two functionalities
 """
 
 from contextlib import asynccontextmanager
+from typing import AsyncGenerator
 
 import httpx
 from fastapi import FastAPI
@@ -17,7 +18,7 @@ from api import accent_marker, dict_query, furigana_marker, sentence_query, usag
 
 
 @asynccontextmanager
-async def lifespan(app: FastAPI):
+async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     """
     Lifespan context manager for FastAPI application.
 

@@ -1,6 +1,6 @@
 import json
 import re
-from typing import Literal, Optional
+from typing import Any, Literal, Optional
 
 import httpx
 import jaconv
@@ -26,9 +26,9 @@ class HeadWordRequest(BaseModel):
 
 
 class IdRequest(BaseModel):
-    """Class representing a request object for ID"""
+    """Class representing a request object for headword ID"""
 
-    id: str = Field(description="The ID of the word")
+    headword_id: str = Field(description="The headword ID of the word")
     site: Literal["NLB", "NLT"] = Field(
         default="NLB",
         description="The site to query, either 'NLB' or 'NLT'. Default is 'NLB'.",
@@ -65,17 +65,17 @@ class URL(BaseModel):
 class IdDetails(BaseModel):
     """Class representing details of a word"""
 
-    base: dict = Field(description="The base form of the word")
-    subcorpus: list[dict] = Field(description="The subcorpus of the word")
-    shojikei: list[dict] = Field(description="The shojikei of the word")
-    subcorpus_shojikei: list[dict] = Field(
+    base: dict[str, Any] = Field(description="The base form of the word")
+    subcorpus: list[dict[str, Any]] = Field(description="The subcorpus of the word")
+    shojikei: list[dict[str, Any]] = Field(description="The shojikei of the word")
+    subcorpus_shojikei: list[dict[str, Any]] = Field(
         description="The distribution of shojikei by subcorpus of the word"
     )
-    katuyokei: list[dict] = Field(description="The katuyokei of the word")
-    setuzoku: list[dict] = Field(
+    katuyokei: list[dict[str, Any]] = Field(description="The katuyokei of the word")
+    setuzoku: list[dict[str, Any]] = Field(
         description="The subsequent auxiliary verbs of the word"
     )
-    patternfreqorder: list[dict] = Field(
+    patternfreqorder: list[dict[str, Any]] = Field(
         description="The frequency of the word in different patterns"
     )
 
@@ -117,7 +117,7 @@ class IdResponse(BaseModel):
         default=200, description="Status code of response align with RFC 9110"
     )
     result: Optional[IdDetails] = Field(
-        description="Details of the word with the given ID"
+        description="Details of the word with the given headword ID"
     )
     error: Optional[ErrorInfo] = Field(
         default=None,
@@ -149,8 +149,8 @@ def text_type(text: str) -> str | None:
 )
 async def get_headwords(
     request: HeadWordRequest, client: httpx.AsyncClient = Depends(get_http_client)
-):
-    """Get headword_list for the word."""
+) -> dict[str, Any]:
+    """Get the lists of information of headwords with the given word."""
 
     match text_type(request.word):
         case "yomi":
@@ -201,7 +201,7 @@ async def get_headwords(
         try:
             data = response.json()
             result = []
-            if data.get("rows") and len(data["rows"]) > 0:
+            if data.get("rows") is not None and len(data["rows"]) > 0:
                 for row in data["rows"]:
                     id = row.get("id")
                     headword_id = row.get("headword_id")
@@ -258,8 +258,8 @@ async def get_headwords(
 @router.post("/UsageQuery/URL/", tags=["UsageQuery"], response_model=URLResponse)
 async def get_urls(
     request: HeadWordRequest, client: httpx.AsyncClient = Depends(get_http_client)
-):
-    """Get URL for the word with the given word."""
+) -> dict[str, Any]:
+    """Get the URLs of words with the given word."""
     response = await get_headwords(request, client)
 
     if response["status"] != 200:
@@ -285,20 +285,22 @@ async def get_urls(
 @router.post("/UsageQuery/IdDetails/", tags=["UsageQuery"], response_model=IdResponse)
 async def get_id_details(
     request: IdRequest, client: httpx.AsyncClient = Depends(get_http_client)
-):
-    """Get details for the word with the given ID."""
+) -> dict[str, Any]:
+    """Get the details of the given headword ID."""
 
-    async def fetch_data(mode: Literal["get", "post"], endpoint: str, target: str = ""):
+    async def fetch_data(
+        mode: Literal["get", "post"], endpoint: str, target: str = ""
+    ) -> IdResponse | Any:
         """Helper function to fetch and parse JSON data"""
         match mode:
             case "get":
                 headers = {
-                    "Referer": f"{SITE[request.site]}/headword/{request.id}/",
+                    "Referer": f"{SITE[request.site]}/headword/{request.headword_id}/",
                     "User-Agent": "Mozilla/5.0",
                 }
                 try:
                     response = await client.get(
-                        f"{SITE[request.site]}/{endpoint}/{request.id}/",
+                        f"{SITE[request.site]}/{endpoint}/{request.headword_id}/",
                         headers=headers,
                     )
                 except httpx.TimeoutException:
@@ -316,12 +318,12 @@ async def get_id_details(
             case "post":
                 headers = {
                     "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
-                    "Referer": f"{SITE[request.site]}/headword/{request.id}/",
+                    "Referer": f"{SITE[request.site]}/headword/{request.headword_id}/",
                     "User-Agent": "Mozilla/5.0",
                 }
                 try:
                     response = await client.post(
-                        f"{SITE[request.site]}/{endpoint}/{request.id}/",
+                        f"{SITE[request.site]}/{endpoint}/{request.headword_id}/",
                         headers=headers,
                     )
                 except httpx.TimeoutException:
@@ -340,7 +342,7 @@ async def get_id_details(
         if response.status_code == 200:
             try:
                 data = response.json()
-                ret = data[target] if target and data.get(target) else data
+                ret = data[target] if target and data.get(target) is not None else data
                 # print(f"Fetched {target}: {ret}")
                 return ret
             except Exception as e:
@@ -360,7 +362,9 @@ async def get_id_details(
                 result=None,
                 error=ErrorInfo(
                     code=response.status_code,
-                    message=f"HTTP error {response.status_code} while fetching {endpoint}",
+                    message=(
+                        f"HTTP error {response.status_code} while fetching {endpoint}"
+                    ),
                 ),
             )
 

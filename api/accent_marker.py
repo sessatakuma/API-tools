@@ -3,19 +3,22 @@ An API that mark accent of given query text
 """
 
 import string
-from typing import Optional, List, Any
+from typing import Any
 
 import jaconv
 import neologdn
-import requests
-from fastapi import APIRouter
+import requests  # type: ignore
 from bs4 import BeautifulSoup
+from fastapi import APIRouter
 from pydantic import BaseModel, Field
+from requests.exceptions import (  # type: ignore
+    ConnectionError,
+    HTTPError,
+    Timeout,
+    TooManyRedirects,
+)
 
-from api.furigana_marker import SingleWordResultObject, mark_furigana
-from api.furigana_marker import Response as FuriganaResponse
-
-from requests.exceptions import Timeout, TooManyRedirects, HTTPError, ConnectionError
+from api.furigana_marker import Request, SingleWordResultObject, mark_furigana
 
 tags_metadata = [
     {
@@ -24,17 +27,93 @@ tags_metadata = [
     },
 ]
 
-
-punctuation_marks = set(["。", "，", "、", "・", "——", "……", "—", "…", "「", "」", "『", "』", "（", "）", "—", "、、、", "、", "————", "—", "？", "！", ".", ",", "：", "；", "(", ")", "\"", "--", "-", "", "/", ":", ";", "！", "＂", "＃", "＄", "％", "＆", "＼", "’", "（", "）", "＊", "＋", "，", "－", "．", "／", "：", "；", "＜", "＝", "＞", "？", "＠", "［", "＼", "］", "︿", "＿", "‵", "｛", "｝", "｜", "～", "“", "”"]).union(set(string.punctuation))
+punctuation_marks = set(
+    [
+        "。",
+        "，",
+        "、",
+        "・",
+        "——",
+        "……",
+        "—",
+        "…",
+        "「",
+        "」",
+        "『",
+        "』",
+        "（",
+        "）",
+        "—",
+        "、、、",
+        "、",
+        "————",
+        "—",
+        "？",
+        "！",
+        ".",
+        ",",
+        "：",
+        "；",
+        "(",
+        ")",
+        '"',
+        "--",
+        "-",
+        "",
+        "/",
+        ":",
+        ";",
+        "！",
+        "＂",
+        "＃",
+        "＄",
+        "％",
+        "＆",
+        "＼",
+        "’",
+        "（",
+        "）",
+        "＊",
+        "＋",
+        "，",
+        "－",
+        "．",
+        "／",
+        "：",
+        "；",
+        "＜",
+        "＝",
+        "＞",
+        "？",
+        "＠",
+        "［",
+        "＼",
+        "］",
+        "︿",
+        "＿",
+        "‵",
+        "｛",
+        "｝",
+        "｜",
+        "～",
+        "“",
+        "”",
+    ]
+).union(set(string.punctuation))
 skip_marks = set(string.ascii_lowercase + string.ascii_uppercase)
 
-def clean_query(query):
-    """For OJAD, the query text should without punctuations and alphabets for better result"""
-    return ''.join(chr for chr in query if chr not in skip_marks)
 
-def is_kana_or_kanji(char):
+def clean_query(query: str) -> str:
+    """
+    For OJAD, the query text should without punctuations and alphabets for better
+    result
+    """
+    return "".join(chr for chr in query if chr not in skip_marks)
+
+
+def is_kana_or_kanji(char: Any) -> bool:
     """Check whether given character is kana or kanji (ignore half-width kana)"""
-    exception_symbols = ['\u30a0', '\u30fb', '\u30fc', '\u30fd', '\u30fe', '\u30ff']
+    exception_symbols = ["\u30a0", "\u30fb", "\u30fc", "\u30fd", "\u30fe", "\u30ff"]
     if char in exception_symbols:
         # '゠', '・', 'ー', 'ヽ', 'ヾ', 'ヿ' which should be regard as punchutation
         return False
@@ -44,67 +123,70 @@ def is_kana_or_kanji(char):
         return True
     return False
 
-class Request(BaseModel):
-    """Class representing a request object"""
-    text: str = Field(
-        description="The text to query"
-    )
+
+# class Request(BaseModel):
+#     """Class representing a request object"""
+
+#     text: str = Field(description="The text to query")
+
 
 class ErrorInfo(BaseModel):
     """Class representing an error information"""
-    code: int = Field(
-        description="The error code that follows JSON-RPC 2.0"
-    )
+
+    code: int = Field(description="The error code that follows JSON-RPC 2.0")
     message: str = Field(
         description="The error message that describe the details of an error"
     )
+    length: int = Field(description="Length of the furigana")
+
 
 class AccentInfo(BaseModel):
     """Class representing an accent information"""
-    furigana: str = Field(
-        description="The furigana of given kana and kanji"
-    )
+
+    furigana: str = Field(description="The furigana of given kana and kanji")
     accent_marking_type: int = Field(
         description="The type of accent, including none (0), heiban (1), fall (2)"
     )
+    length: int = Field(description="Length of the furigana")
+
 
 class SingleWordAccentResultObject(BaseModel):
     """Class representing a single word result object"""
-    furigana: str = Field(
-        description="Furigana of given kana and kanji"
-    )
-    surface: str = Field(
-        description="The (partial of) original query text"
-    )
-    accent: List[AccentInfo] = Field(
-        description="The accent of givent word"
-    )
+
+    furigana: str = Field(description="Furigana of given kana and kanji")
+    surface: str = Field(description="The (partial of) original query text")
+    accent: list[AccentInfo] = Field(description="The accent of givent word")
+
 
 class MultiWordAccentResultObject(SingleWordAccentResultObject):
     """Class representing a multiple word result object"""
-    subword: List[SingleWordResultObject] = Field(
+
+    subword: list[SingleWordResultObject] = Field(
         description="""A list contains more details when a \
         word contains both kanji and kana. Each elements in \
         subword is a dict with furigana and surface."""
     )
 
+
 class Response(BaseModel):
     """Class representing a response object"""
+
     status: int = Field(
-        default=200,
-        description="Status code of response align with RFC 9110"
+        default=200, description="Status code of response align with RFC 9110"
     )
-    result: List[SingleWordAccentResultObject | MultiWordAccentResultObject] = Field(
+    result: list[SingleWordAccentResultObject | MultiWordAccentResultObject] = Field(
         description="A list contains marked results"
     )
-    error: Optional[ErrorInfo] = Field(
+    error: ErrorInfo | None = Field(
         default=None,
-        description="An object that describe the details of an error when occur"
+        description="An object that describe the details of an error when occur",
     )
+
 
 router = APIRouter()
 
-def get_ojad_result(query_text: str) -> List:
+
+def get_ojad_result(query_text: str) -> tuple[str, list[dict[str, Any]]]:
     """Parse cleaned query_text to OJAD, concate whole result as a list"""
 
     # URL to suzukikun(すずきくん)
@@ -121,7 +203,7 @@ def get_ojad_result(query_text: str) -> List:
         "data[Phrasing][phrase_component]": "invisible",
         "data[Phrasing][param]": "invisible",
         "data[Phrasing][subscript]": "visible",
-        "data[Phrasing][jeita]": "invisible"
+        "data[Phrasing][jeita]": "invisible",
     }
 
     # Send a POST and receive the website html code
@@ -149,19 +231,22 @@ def get_ojad_result(query_text: str) -> List:
         for moji in mojis:
             # Check accent mark (we don't use unvoiced)
             accent = 0
-            if moji['class'][0] == 'accent_plain':
+            if moji["class"][0] == "accent_plain":
                 accent = 1
-            elif moji['class'][0] == 'accent_top':
+            elif moji["class"][0] == "accent_top":
                 accent = 2
-            ojad_results.append({'text': moji.get_text(), 'accent': accent})
+            ojad_results.append({"text": moji.get_text(), "accent": accent})
     return paragraph, ojad_results
+
 
 @router.post("/MarkAccent/", tags=["MarkAccent"], response_model=Response)
 def mark_accent(request: Request) -> dict[str, Any]:
     """Receive POST request, return a JSON response"""
     try:
         query_text = neologdn.normalize(request.text, tilde="normalize")
-        furigana_results: List = mark_furigana(Request(text=query_text))['result']
+        furigana_results: list[dict[str, str]] = mark_furigana(
+            Request(text=query_text)
+        )["result"]
         ojad_surface, ojad_results = get_ojad_result(query_text)
 
         # For debug use
@@ -172,132 +257,152 @@ def mark_accent(request: Request) -> dict[str, Any]:
         final_response_results = []
         ojad_idx_cnt = 0
         for furigana_result in furigana_results:
-            yahoo_furigana = furigana_result['furigana']
+            yahoo_furigana = furigana_result["furigana"]
             yahoo_furigana_hira = jaconv.kata2hira(yahoo_furigana)
-            yahoo_surface = furigana_result['surface']
-            accents = []
+            yahoo_surface = furigana_result["surface"]
+            accents: list[AccentInfo] = []
 
-            # If query sub-text contains non-kana and non-kanji words, we should ignore it
+            # If query sub-text contains non-kana and non-kanji words,
+            # we should ignore it
             # Including alphabet and punchutation and others
             # For punctuation marks, since Yahoo will hold the original query text
             # While OJAD may replace or remove the punctuation marks
             # Therefore we only reserve the punctuation marks from Yahoo
-            if 'subword' not in furigana_result and \
-                any(not is_kana_or_kanji(chr) for chr in yahoo_furigana):
-                print(f"Successfully processing {yahoo_furigana} \t with {yahoo_furigana}")
-                accents.append(AccentInfo(
-                    furigana=yahoo_surface,
-                    accent_marking_type=0
-                ))
+            if "subword" not in furigana_result and any(
+                not is_kana_or_kanji(chr) for chr in yahoo_furigana
+            ):
+                print(
+                    f"Successfully processing {yahoo_furigana} \t with {yahoo_furigana}"
+                )
+                accents.append(
+                    AccentInfo(
+                        furigana=yahoo_surface,
+                        accent_marking_type=0,
+                        length=len(yahoo_surface),  # 新增 length
+                    )
+                )
                 final_response_results.append(
                     SingleWordAccentResultObject(
-                        furigana=yahoo_furigana,
-                        surface=yahoo_surface,
-                        accent=accents
+                        furigana=yahoo_furigana, surface=yahoo_surface, accent=accents
                     )
                 )
                 continue
 
             # Remove all mismatching prefix
-            # Note that sometimes OJAD will transform katagana to hiragana, so make sure we're matching with same type
+            # Note that sometimes OJAD will transform katagana to hiragana,
+            # so make sure we're matching with same type
             ojad_idx = ojad_idx_cnt
-            while ojad_idx < len(ojad_results) and \
-                not yahoo_furigana_hira.startswith(jaconv.kata2hira(ojad_results[ojad_idx]['text'])):
+            while ojad_idx < len(ojad_results) and not yahoo_furigana_hira.startswith(
+                jaconv.kata2hira(ojad_results[ojad_idx]["text"])
+            ):
                 ojad_idx += 1
 
-            # Match the furigana from Yahoo with OJAD results
+            # ctch the furigana from Yahoo with OJAD results
             ojad_furigana = ""
-            while len(ojad_furigana) < len(yahoo_furigana) and ojad_idx < len(ojad_results):
-                ojad_text = ojad_results[ojad_idx]['text']
+            while len(ojad_furigana) < len(yahoo_furigana) and ojad_idx < len(
+                ojad_results
+            ):
+                ojad_text = ojad_results[ojad_idx]["text"]
                 ojad_furigana += ojad_text
-                accents.append({'len': len(ojad_text), 'accent': ojad_results[ojad_idx]['accent']})
+                accents.append(
+                    AccentInfo(
+                        furigana=ojad_text,
+                        accent_marking_type=ojad_results[ojad_idx]["accent"],
+                        length=len(ojad_text),  # 新增 length
+                    )
+                )
+
                 ojad_idx += 1
 
             # If we successfully match the furigana from Yahoo with OJAD results
-            if len(ojad_furigana) == len(yahoo_furigana) and jaconv.kata2hira(ojad_furigana) == jaconv.kata2hira(yahoo_furigana):
-                print(f"Successfully processing {ojad_furigana} \t with {yahoo_furigana}")
+            if len(ojad_furigana) == len(yahoo_furigana) and jaconv.kata2hira(
+                ojad_furigana
+            ) == jaconv.kata2hira(yahoo_furigana):
+                print(
+                    f"Successfully processing {ojad_furigana} \t with {yahoo_furigana}"
+                )
                 # Build accent info list
                 accent_info_list = []
                 yahoo_furigana_idx = 0
                 for idx, accent in enumerate(accents):
-                    accent_info_list.append(AccentInfo(
-                        furigana=yahoo_furigana[yahoo_furigana_idx:yahoo_furigana_idx+accent['len']],
-                        accent_marking_type=accent['accent']
-                    ))
-                    yahoo_furigana_idx += accent['len']
+                    accent_info_list.append(
+                        AccentInfo(
+                            furigana=yahoo_furigana[
+                                yahoo_furigana_idx : yahoo_furigana_idx + accent.length
+                            ],
+                            accent_marking_type=accent.accent_marking_type,
+                            length=accent.length,
+                        )
+                    )
+                    yahoo_furigana_idx += accent.length
+
                 # Update ojad_idx_cnt
                 ojad_idx_cnt = ojad_idx
                 # Build final response result
-                if 'subword' not in furigana_result:
+                if "subword" not in furigana_result:
                     final_response_results.append(
                         SingleWordAccentResultObject(
                             furigana=yahoo_furigana,
                             surface=yahoo_surface,
-                            accent=accent_info_list
+                            accent=accent_info_list,
                         )
                     )
                 else:
-                    yahoo_subword = furigana_result['subword']
+                    yahoo_subword = furigana_result["subword"]
                     final_response_results.append(
                         MultiWordAccentResultObject(
                             furigana=yahoo_furigana,
                             surface=yahoo_surface,
                             accent=accent_info_list,
-                            subword=yahoo_subword
+                            subword=[
+                                SingleWordResultObject(furigana=s, surface=s)
+                                for s in yahoo_subword
+                            ],
                         )
                     )
             else:
                 # [TODO] Do our best to give correct result
                 # If we cannot make it, we should return some error message
-                print(f"[ERROR] Some error occured when processing {ojad_furigana} \t with {yahoo_furigana}")
+                print(
+                    f"[ERROR] Some error occured when processing "
+                    f"{ojad_furigana} \t with {yahoo_furigana}"
+                )
 
-        response = Response(
-            status=200,
-            result=final_response_results
-        )
+        response = Response(status=200, result=final_response_results)
     except Timeout as time_err:
         response = Response(
             status=504,
             result=[],
-            error=ErrorInfo(
-                code=504,
-                message=f"Request Timeout: {time_err}"
-            )
+            error=ErrorInfo(code=504, message=f"Request Timeout: {time_err}", length=0),
         )
     except TooManyRedirects as redirect_err:
         response = Response(
             status=500,
             result=[],
             error=ErrorInfo(
-                code=500,
-                message=f"Too many redirects: {redirect_err}"
-            )
+                code=500, message=f"Too many redirects: {redirect_err}", length=0
+            ),
         )
     except HTTPError as http_err:
         response = Response(
             status=int(http_err.response.status_code),
             result=[],
             error=ErrorInfo(
-                code=int(http_err.response.status_code),
-                message=str(http_err)
-            )
+                code=int(http_err.response.status_code), message=str(http_err), length=0
+            ),
         )
     except ConnectionError as conn_err:
         response = Response(
             status=500,
             result=[],
             error=ErrorInfo(
-                code=500,
-                message=f"Connection error: {conn_err}"
-            )
+                code=500, message=f"Connection error: {conn_err}", length=0
+            ),
         )
     except Exception as e:
         response = Response(
             status=500,
             result=[],
-            error=ErrorInfo(
-                code=500,
-                message=f"Non-usual error occurs: {e}"
-            )
+            error=ErrorInfo(code=500, message=f"Non-usual error occurs: {e}", length=0),
         )
-    return response
+    return response.model_dump()

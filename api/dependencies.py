@@ -16,4 +16,5 @@ async def get_http_client(request: Request) -> httpx.AsyncClient:
     Returns:
         httpx.AsyncClient: The HTTP client instance.
     """
-    return request.app.state.http_client
+    ret: httpx.AsyncClient = request.app.state.http_client
+    return ret
