@@ -4,7 +4,7 @@ An API that mark furigana of given query text
 
 import json
 import os
-from typing import Any, List, Optional
+from typing import Any
 
 import requests  # type: ignore
 import yaml
@@ -44,7 +44,7 @@ class SingleWordResultObject(BaseModel):
 class MultiWordResultObject(SingleWordResultObject):
     """Class representing a multiple word result object"""
 
-    subword: List[SingleWordResultObject] = Field(
+    subword: list[SingleWordResultObject] = Field(
         description="""A list contains more details when a \
         word contains both kanji and kana. Each elements in \
         subword is a dict with furigana and surface."""
@@ -57,10 +57,10 @@ class Response(BaseModel):
     status: int = Field(
         default=200, description="Status code of response align with RFC 9110"
     )
-    result: List[SingleWordResultObject | MultiWordResultObject] = Field(
+    result: list[SingleWordResultObject | MultiWordResultObject] = Field(
         description="A list contains marked results"
     )
-    error: Optional[ErrorInfo] = Field(
+    error: ErrorInfo | None = Field(
         default=None,
         description="An object that describe the details of an error when occur",
     )

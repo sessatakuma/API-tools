@@ -3,7 +3,7 @@ An API that mark accent of given query text
 """
 
 import string
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 import jaconv
 import neologdn
@@ -26,7 +26,6 @@ tags_metadata = [
         "description": "Mark accent of given text",
     },
 ]
-
 
 punctuation_marks = set(
     [
@@ -105,7 +104,10 @@ skip_marks = set(string.ascii_lowercase + string.ascii_uppercase)
 
 
 def clean_query(query: str) -> str:
-    """For OJAD, the query text should without punctuations and alphabets for better result"""
+    """
+    For OJAD, the query text should without punctuations and alphabets for better
+    result
+    """
     return "".join(chr for chr in query if chr not in skip_marks)
 
 
@@ -153,13 +155,13 @@ class SingleWordAccentResultObject(BaseModel):
 
     furigana: str = Field(description="Furigana of given kana and kanji")
     surface: str = Field(description="The (partial of) original query text")
-    accent: List[AccentInfo] = Field(description="The accent of givent word")
+    accent: list[AccentInfo] = Field(description="The accent of givent word")
 
 
 class MultiWordAccentResultObject(SingleWordAccentResultObject):
     """Class representing a multiple word result object"""
 
-    subword: List[SingleWordResultObject] = Field(
+    subword: list[SingleWordResultObject] = Field(
         description="""A list contains more details when a \
         word contains both kanji and kana. Each elements in \
         subword is a dict with furigana and surface."""
@@ -172,10 +174,10 @@ class Response(BaseModel):
     status: int = Field(
         default=200, description="Status code of response align with RFC 9110"
     )
-    result: List[SingleWordAccentResultObject | MultiWordAccentResultObject] = Field(
+    result: list[SingleWordAccentResultObject | MultiWordAccentResultObject] = Field(
         description="A list contains marked results"
     )
-    error: Optional[ErrorInfo] = Field(
+    error: ErrorInfo | None = Field(
         default=None,
         description="An object that describe the details of an error when occur",
     )
@@ -184,7 +186,7 @@ class Response(BaseModel):
 router = APIRouter()
 
 
-def get_ojad_result(query_text: str) -> Tuple[str, List[Dict[str, Any]]]:
+def get_ojad_result(query_text: str) -> tuple[str, list[dict[str, Any]]]:
     """Parse cleaned query_text to OJAD, concate whole result as a list"""
 
     # URL to suzukikun(すずきくん)
@@ -242,7 +244,7 @@ def mark_accent(request: Request) -> dict[str, Any]:
     """Receive POST request, return a JSON response"""
     try:
         query_text = neologdn.normalize(request.text, tilde="normalize")
-        furigana_results: List[Dict[str, str]] = mark_furigana(
+        furigana_results: list[dict[str, str]] = mark_furigana(
             Request(text=query_text)
         )["result"]
         ojad_surface, ojad_results = get_ojad_result(query_text)
@@ -260,7 +262,8 @@ def mark_accent(request: Request) -> dict[str, Any]:
             yahoo_surface = furigana_result["surface"]
             accents: list[AccentInfo] = []
 
-            # If query sub-text contains non-kana and non-kanji words, we should ignore it
+            # If query sub-text contains non-kana and non-kanji words,
+            # we should ignore it
             # Including alphabet and punchutation and others
             # For punctuation marks, since Yahoo will hold the original query text
             # While OJAD may replace or remove the punctuation marks
@@ -286,7 +289,8 @@ def mark_accent(request: Request) -> dict[str, Any]:
                 continue
 
             # Remove all mismatching prefix
-            # Note that sometimes OJAD will transform katagana to hiragana, so make sure we're matching with same type
+            # Note that sometimes OJAD will transform katagana to hiragana,
+            # so make sure we're matching with same type
             ojad_idx = ojad_idx_cnt
             while ojad_idx < len(ojad_results) and not yahoo_furigana_hira.startswith(
                 jaconv.kata2hira(ojad_results[ojad_idx]["text"])
@@ -360,7 +364,8 @@ def mark_accent(request: Request) -> dict[str, Any]:
                 # [TODO] Do our best to give correct result
                 # If we cannot make it, we should return some error message
                 print(
-                    f"[ERROR] Some error occured when processing {ojad_furigana} \t with {yahoo_furigana}"
+                    f"[ERROR] Some error occured when processing "
+                    f"{ojad_furigana} \t with {yahoo_furigana}"
                 )
 
         response = Response(status=200, result=final_response_results)
