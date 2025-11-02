@@ -1,12 +1,14 @@
-from typing import List, Optional
 import asyncio
+from typing import Any, List, Optional
+from urllib.parse import parse_qs, urlparse
+
 import httpx
+from bs4 import BeautifulSoup
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel, Field
-from bs4 import BeautifulSoup
-from urllib.parse import urlparse, parse_qs
+
 from api.dependencies import get_http_client
-from typing import Any
+
 
 class Request(BaseModel):
     word: str = Field(description="The word to query")
@@ -27,7 +29,8 @@ class ErrorInfo(BaseModel):
 
 class Response(BaseModel):
     status: int = Field(default=200, description="Status code")
-    result: Optional[List[WordResult]] = Field(default=None, description="List of results")
+    result: Optional[List[WordResult]] = Field(default=None, 
+                                               description="List of results")
     error: Optional[ErrorInfo] = Field(default=None, description="Error details")
 
 router = APIRouter()
@@ -45,7 +48,11 @@ async def get_all_url(search_word: str, client: httpx.AsyncClient) -> list[str]:
     # 判斷是否因為只有一個結果而直接跳轉
     if "entr.py" in str(response.url):
         entry_id = parse_qs(urlparse(str(response.url)).query).get("e", [None])[0]
-        return [f"https://www.edrdg.org/jmwsgi/entr.py?svc=jmdict&e={entry_id}"] if entry_id else []
+        return (
+            [f"https://www.edrdg.org/jmwsgi/entr.py?svc=jmdict&e={entry_id}"]
+            if entry_id
+            else []
+        )
     
     soup = BeautifulSoup(response.text, "html.parser")
     rows = soup.find_all("tr", class_="resrow")
@@ -76,8 +83,12 @@ async def get_dict(url_list: list[str], client: httpx.AsyncClient) -> list[WordR
 
             definitions: list[Definition] = []
             for sense in soup.select("tr.sense"):
-                pos = [k.get_text(" ", strip=True) for k in sense.select("span.pos span.abbr")]
-                meanings = [k.get_text(" ", strip=True).replace("▶", "").strip() for k in sense.select("span.glossx")]
+                pos = [k.get_text(" ", strip=True) 
+                       for k in sense.select("span.pos span.abbr")]
+                meanings = [
+                    k.get_text(" ", strip=True).replace("▶", "").strip()
+                    for k in sense.select("span.glossx")
+                ]
                 definitions.append(Definition(pos=pos, meanings=meanings))
 
             jmdict_id = soup.select_one('a[href^="srchres.py"]')
@@ -95,7 +106,9 @@ async def get_dict(url_list: list[str], client: httpx.AsyncClient) -> list[WordR
     return results
 
 @router.post("/DictQuery/", tags=["DictionaryQuery"], response_model=Response)
-async def dict_query(request: Request, client: httpx.AsyncClient = Depends(get_http_client)) -> dict[str, Any]:
+async def dict_query(request: Request, 
+                     client: httpx.AsyncClient = Depends(get_http_client)
+                     ) -> dict[str, Any]:
     """Query JMdict dictionary for the given word."""
 
     try:

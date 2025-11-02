@@ -1,18 +1,21 @@
 import asyncio
+import re
+from typing import Any, List, Optional
+
 import httpx
+from bs4 import BeautifulSoup, Comment
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel, Field
-from bs4 import BeautifulSoup, Comment
-from typing import List, Optional
-import re
+
 from api.dependencies import get_http_client
-from typing import Any
+
 
 class Request(BaseModel):
     """Class representing a request object"""
 
     word: str = Field(description="The word to query")
-    id: int = Field(description="The unique ID of a word in JMdict.\nMust be obtained through DictionaryQuery to fetch example sentences.")
+    id: int = Field(description="The unique ID of a word in JMdict.\n" \
+    "Must be obtained through DictionaryQuery to fetch example sentences.")
 
 class WordSentence(BaseModel):
     jp: str = Field(description="jp sentence")
@@ -32,12 +35,15 @@ router = APIRouter()
 
 # 根據接收到的漢字及ID回傳可能的例句
 @router.post("/SentenceQuery/", tags=["SentenceQuery"], response_model=Response)
-async def sentence_query(request: Request, client: httpx.AsyncClient = Depends(get_http_client)) -> dict[str, Any]:
+async def sentence_query(request: Request,
+                        client: httpx.AsyncClient = Depends(get_http_client),
+                        ) -> dict[str, Any]:
     """
     Example sentences from JMdict.
 
     - Uses the provided `word`(kanji or furigana) and `id` from DictionaryQuery.
-    - Returns a list of sentences containing both Japanese text and their English translations.
+    - Returns a list of sentences containing 
+    both Japanese text and their English translations.
     """
     url = "https://www.edrdg.org/cgi-bin/wwwjdic/wwwjdic?1E"
     payload = {
