@@ -6,6 +6,7 @@ from pydantic import BaseModel, Field
 from bs4 import BeautifulSoup
 from urllib.parse import urlparse, parse_qs
 from api.dependencies import get_http_client
+from typing import Any
 
 class Request(BaseModel):
     word: str = Field(description="The word to query")
@@ -32,7 +33,7 @@ class Response(BaseModel):
 router = APIRouter()
 
 # 取得所有符合資料的 url
-async def get_all_url(search_word: str, client: httpx.AsyncClient) -> list:
+async def get_all_url(search_word: str, client: httpx.AsyncClient) -> list[str]:
     url = f"https://www.edrdg.org/jmwsgi/srchres.py?s1=1&y1=1&t1={search_word}&src=1&search=Search&svc=jmdict"
 
     try:
@@ -43,7 +44,7 @@ async def get_all_url(search_word: str, client: httpx.AsyncClient) -> list:
 
     # 判斷是否因為只有一個結果而直接跳轉
     if "entr.py" in str(response.url):
-        entry_id = parse_qs(urlparse(response.url).query).get("e", [None])[0]
+        entry_id = parse_qs(urlparse(str(response.url)).query).get("e", [None])[0]
         return [f"https://www.edrdg.org/jmwsgi/entr.py?svc=jmdict&e={entry_id}"] if entry_id else []
     
     soup = BeautifulSoup(response.text, "html.parser")
@@ -58,8 +59,8 @@ async def get_all_url(search_word: str, client: httpx.AsyncClient) -> list:
     return url_list
 
 # 根據 url 清單回傳查詢結果
-async def get_dict(url_list: list, client: httpx.AsyncClient) -> list:
-    results = []
+async def get_dict(url_list: list[str], client: httpx.AsyncClient) -> list[WordResult]:
+    results: list[WordResult] = []
     for url in url_list:
         try:
             response = await client.get(url)
@@ -73,7 +74,7 @@ async def get_dict(url_list: list, client: httpx.AsyncClient) -> list:
             kanji = [k.get_text(strip=True) for k in soup.select("span.kanj")]
             furigana = [k.get_text(strip=True) for k in soup.select("span.rdng")]
 
-            definitions = []
+            definitions: list[Definition] = []
             for sense in soup.select("tr.sense"):
                 pos = [k.get_text(" ", strip=True) for k in sense.select("span.pos span.abbr")]
                 meanings = [k.get_text(" ", strip=True).replace("▶", "").strip() for k in sense.select("span.glossx")]
@@ -94,7 +95,7 @@ async def get_dict(url_list: list, client: httpx.AsyncClient) -> list:
     return results
 
 @router.post("/DictQuery/", tags=["DictionaryQuery"], response_model=Response)
-async def dict_query(request: Request, client: httpx.AsyncClient = Depends(get_http_client)):
+async def dict_query(request: Request, client: httpx.AsyncClient = Depends(get_http_client)) -> dict[str, Any]:
     """Query JMdict dictionary for the given word."""
 
     try:
@@ -123,7 +124,7 @@ async def dict_query(request: Request, client: httpx.AsyncClient = Depends(get_h
 
 # Test codes
 if __name__ == "__main__":
-    async def test():
+    async def test() -> None:
         async with httpx.AsyncClient() as client:
             print(await dict_query(Request(word="先生"), client))
             print(await dict_query(Request(word="少女"), client))

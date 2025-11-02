@@ -6,6 +6,7 @@ from bs4 import BeautifulSoup, Comment
 from typing import List, Optional
 import re
 from api.dependencies import get_http_client
+from typing import Any
 
 class Request(BaseModel):
     """Class representing a request object"""
@@ -31,7 +32,7 @@ router = APIRouter()
 
 # 根據接收到的漢字及ID回傳可能的例句
 @router.post("/SentenceQuery/", tags=["SentenceQuery"], response_model=Response)
-async def sentence_query(request: Request, client: httpx.AsyncClient = Depends(get_http_client)):
+async def sentence_query(request: Request, client: httpx.AsyncClient = Depends(get_http_client)) -> dict[str, Any]:
     """
     Example sentences from JMdict.
 
@@ -103,7 +104,7 @@ async def sentence_query(request: Request, client: httpx.AsyncClient = Depends(g
 
 # Test codes
 if __name__ == "__main__":
-    async def test():
+    async def test()-> None:
         async with httpx.AsyncClient() as client:
             print(await sentence_query(Request(word="先生", id=1387990), client))
             print(await sentence_query(Request(word="せんせい", id=1387990), client))
