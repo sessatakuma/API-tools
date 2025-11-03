@@ -97,7 +97,26 @@ async def mark_furigana(request: Request) -> dict[str, Any]:
     # 呼叫API
     async with httpx.AsyncClient(timeout=10.0) as client:
         response = await client.post(url, headers=headers, json=data)
+
+    if response.status_code != 200:
+        return Response(
+            status=response.status_code,
+            result=[],
+            error=ErrorInfo(
+                code=response.status_code,
+                message=f"Yahoo API request failed with status {response.status_code}",
+            ),
+        ).model_dump()
+
     result = response.json()
+    if "result" not in result or "word" not in result["result"]:
+        return Response(
+            status=500,
+            result=[],
+            error=ErrorInfo(
+                code=500, message="Unexpected response format from Yahoo API"
+            ),
+        ).model_dump()
 
     words = result["result"]["word"]
     parsed_result: list[SingleWordResultObject | MultiWordResultObject] = []
