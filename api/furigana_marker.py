@@ -2,11 +2,10 @@
 An API that mark furigana of given query text
 """
 
-import json
 import os
 from typing import Any
 
-import requests  # type: ignore
+import httpx
 import yaml
 from fastapi import APIRouter
 from pydantic import BaseModel, Field
@@ -78,7 +77,7 @@ else:
 
 
 @router.post("/MarkFurigana/", tags=["MarkFurigana"], response_model=Response)
-def mark_furigana(request: Request) -> dict[str, Any]:
+async def mark_furigana(request: Request) -> dict[str, Any]:
     """Receive POST request, return a JSON response"""
     query_text = request.text
 
@@ -96,10 +95,10 @@ def mark_furigana(request: Request) -> dict[str, Any]:
     }
 
     # 呼叫API
-    response = requests.post(url, headers=headers, data=json.dumps(data))
+    async with httpx.AsyncClient(timeout=10.0) as client:
+        response = await client.post(url, headers=headers, json=data)
     result = response.json()
 
-    # 輸出結果
     words = result["result"]["word"]
     parsed_result: list[SingleWordResultObject | MultiWordResultObject] = []
 
