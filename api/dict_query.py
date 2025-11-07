@@ -45,7 +45,7 @@ async def get_all_url(search_word: str, client: httpx.AsyncClient) -> list[str]:
     url = f"https://www.edrdg.org/jmwsgi/srchres.py?s1=1&y1=1&t1={search_word}&src=1&search=Search&svc=jmdict"
 
     try:
-        response = await client.get(url)
+        response = await client.get(url, follow_redirects=True)
         response.encoding = response.charset_encoding or "utf-8"
     except httpx.RequestError as e:
         raise RuntimeError(f"Network error: {str(e)}")
@@ -145,8 +145,8 @@ if __name__ == "__main__":
     async def test() -> None:
         async with httpx.AsyncClient() as client:
             print(await dict_query(Request(word="先生"), client))
-            print(await dict_query(Request(word="少女"), client))
-            print(await dict_query(Request(word="食べる"), client))
-            print(await dict_query(Request(word="嗨嗨"), client))
+            print(await dict_query(Request(word="生所"), client))
+            print(await dict_query(Request(word="みたび"), client))
+            print(await dict_query(Request(word="つらら"), client))
 
     asyncio.run(test())
