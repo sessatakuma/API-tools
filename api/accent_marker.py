@@ -9,7 +9,7 @@ import httpx
 import jaconv
 import neologdn
 from bs4 import BeautifulSoup
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 from httpx import (
     ConnectError,
     HTTPStatusError,
@@ -18,6 +18,7 @@ from httpx import (
 )
 from pydantic import BaseModel, Field
 
+from api.dependencies import get_http_client
 from api.furigana_marker import Request, SingleWordResultObject, mark_furigana
 
 tags_metadata = [
@@ -186,7 +187,10 @@ class Response(BaseModel):
 router = APIRouter()
 
 
-async def get_ojad_result(query_text: str) -> tuple[str, list[dict[str, Any]]]:
+async def get_ojad_result(
+    query_text: str,
+    client: httpx.AsyncClient,
+) -> tuple[str, list[dict[str, Any]]]:
     """Parse cleaned query_text to OJAD, concate whole result as a list"""
 
     # URL to suzukikun(すずきくん)
@@ -207,10 +211,9 @@ async def get_ojad_result(query_text: str) -> tuple[str, list[dict[str, Any]]]:
     }
 
     # Send a POST and receive the website html code
-    async with httpx.AsyncClient(timeout=httpx.Timeout(10.0)) as client:
-        response = await client.post(url, data=data)
-        response.raise_for_status()  # 若 HTTP 非 200 會直接丟例外
-        website = response.text
+    response = await client.post(url, data=data)
+    response.raise_for_status()  # 若 HTTP 非 200 會直接丟例外
+    website = response.text
 
     # use Beautiful Soup to parse the received html file
     soup = BeautifulSoup(website, "html.parser")
@@ -243,14 +246,17 @@ async def get_ojad_result(query_text: str) -> tuple[str, list[dict[str, Any]]]:
 
 
 @router.post("/MarkAccent/", tags=["MarkAccent"], response_model=Response)
-async def mark_accent(request: Request) -> dict[str, Any]:
+async def mark_accent(
+    request: Request, client: httpx.AsyncClient = Depends(get_http_client)
+) -> dict[str, Any]:
     """Receive POST request, return a JSON response"""
     try:
         query_text = neologdn.normalize(request.text, tilde="normalize")
         furigana_response = await mark_furigana(Request(text=query_text))
+
         furigana_results: list[dict[str, str]] = furigana_response["result"]
 
-        ojad_surface, ojad_results = await get_ojad_result(query_text)
+        ojad_surface, ojad_results = await get_ojad_result(query_text, client)
 
         # For debug use
         # print(furigana_results)

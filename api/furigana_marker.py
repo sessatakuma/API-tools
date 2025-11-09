@@ -7,8 +7,10 @@ from typing import Any
 
 import httpx
 import yaml
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 from pydantic import BaseModel, Field
+
+from api.dependencies import get_http_client
 
 tags_metadata = [
     {
@@ -77,7 +79,10 @@ else:
 
 
 @router.post("/MarkFurigana/", tags=["MarkFurigana"], response_model=Response)
-async def mark_furigana(request: Request) -> dict[str, Any]:
+async def mark_furigana(
+    request: Request,
+    client: httpx.AsyncClient = Depends(get_http_client),  # 共用 client
+) -> dict[str, Any]:
     """Receive POST request, return a JSON response"""
     query_text = request.text
 
@@ -94,9 +99,22 @@ async def mark_furigana(request: Request) -> dict[str, Any]:
         "params": {"q": query_text, "grade": 1},
     }
 
-    # 呼叫API
-    async with httpx.AsyncClient(timeout=10.0) as client:
+    try:
         response = await client.post(url, headers=headers, json=data)
+
+    except httpx.TimeoutException:
+        return Response(
+            status=408,
+            result=[],
+            error=ErrorInfo(code=408, message="Yahoo API request timed out"),
+        ).model_dump()
+
+    except httpx.HTTPError as e:
+        return Response(
+            status=500,
+            result=[],
+            error=ErrorInfo(code=500, message=f"HTTP error: {str(e)}"),
+        ).model_dump()
 
     if response.status_code != 200:
         return Response(
