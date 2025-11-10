@@ -252,7 +252,7 @@ async def mark_accent(
     """Receive POST request, return a JSON response"""
     try:
         query_text = neologdn.normalize(request.text, tilde="normalize")
-        furigana_response = await mark_furigana(Request(text=query_text))
+        furigana_response = await mark_furigana(Request(text=query_text), client)
 
         furigana_results: list[dict[str, str]] = furigana_response["result"]
 
@@ -280,9 +280,10 @@ async def mark_accent(
             if "subword" not in furigana_result and any(
                 not is_kana_or_kanji(chr) for chr in yahoo_furigana
             ):
-                print(
-                    f"Successfully processing {yahoo_furigana} \t with {yahoo_furigana}"
-                )
+                # print(
+                #     f" Successfully processing {yahoo_furigana}"
+                #     f"\t with {yahoo_furigana}"
+                # )
                 accents.append(
                     AccentInfo(
                         furigana=yahoo_surface,
