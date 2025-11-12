@@ -5,19 +5,20 @@ An API that mark accent of given query text
 import string
 from typing import Any
 
+import httpx
 import jaconv
 import neologdn
-import requests  # type: ignore
 from bs4 import BeautifulSoup
-from fastapi import APIRouter
-from pydantic import BaseModel, Field
-from requests.exceptions import (  # type: ignore
-    ConnectionError,
-    HTTPError,
-    Timeout,
+from fastapi import APIRouter, Depends
+from httpx import (
+    ConnectError,
+    HTTPStatusError,
+    ReadTimeout,
     TooManyRedirects,
 )
+from pydantic import BaseModel, Field
 
+from api.dependencies import get_http_client
 from api.furigana_marker import Request, SingleWordResultObject, mark_furigana
 
 tags_metadata = [
@@ -186,7 +187,10 @@ class Response(BaseModel):
 router = APIRouter()
 
 
-def get_ojad_result(query_text: str) -> tuple[str, list[dict[str, Any]]]:
+async def get_ojad_result(
+    query_text: str,
+    client: httpx.AsyncClient,
+) -> tuple[str, list[dict[str, Any]]]:
     """Parse cleaned query_text to OJAD, concate whole result as a list"""
 
     # URL to suzukikun(すずきくん)
@@ -207,7 +211,9 @@ def get_ojad_result(query_text: str) -> tuple[str, list[dict[str, Any]]]:
     }
 
     # Send a POST and receive the website html code
-    website = requests.post(url, data, timeout=(3, 5)).text
+    response = await client.post(url, data=data)
+    response.raise_for_status()  # 若 HTTP 非 200 會直接丟例外
+    website = response.text
 
     # use Beautiful Soup to parse the received html file
     soup = BeautifulSoup(website, "html.parser")
@@ -240,14 +246,17 @@ def get_ojad_result(query_text: str) -> tuple[str, list[dict[str, Any]]]:
 
 
 @router.post("/MarkAccent/", tags=["MarkAccent"], response_model=Response)
-def mark_accent(request: Request) -> dict[str, Any]:
+async def mark_accent(
+    request: Request, client: httpx.AsyncClient = Depends(get_http_client)
+) -> dict[str, Any]:
     """Receive POST request, return a JSON response"""
     try:
         query_text = neologdn.normalize(request.text, tilde="normalize")
-        furigana_results: list[dict[str, str]] = mark_furigana(
-            Request(text=query_text)
-        )["result"]
-        ojad_surface, ojad_results = get_ojad_result(query_text)
+        furigana_response = await mark_furigana(Request(text=query_text), client)
+
+        furigana_results: list[dict[str, str]] = furigana_response["result"]
+
+        ojad_surface, ojad_results = await get_ojad_result(query_text, client)
 
         # For debug use
         # print(furigana_results)
@@ -271,9 +280,10 @@ def mark_accent(request: Request) -> dict[str, Any]:
             if "subword" not in furigana_result and any(
                 not is_kana_or_kanji(chr) for chr in yahoo_furigana
             ):
-                print(
-                    f"Successfully processing {yahoo_furigana} \t with {yahoo_furigana}"
-                )
+                # print(
+                #     f" Successfully processing {yahoo_furigana}"
+                #     f"\t with {yahoo_furigana}"
+                # )
                 accents.append(
                     AccentInfo(
                         furigana=yahoo_surface,
@@ -369,7 +379,8 @@ def mark_accent(request: Request) -> dict[str, Any]:
                 )
 
         response = Response(status=200, result=final_response_results)
-    except Timeout as time_err:
+
+    except ReadTimeout as time_err:
         response = Response(
             status=504,
             result=[],
@@ -383,7 +394,7 @@ def mark_accent(request: Request) -> dict[str, Any]:
                 code=500, message=f"Too many redirects: {redirect_err}", length=0
             ),
         )
-    except HTTPError as http_err:
+    except HTTPStatusError as http_err:
         response = Response(
             status=int(http_err.response.status_code),
             result=[],
@@ -391,7 +402,7 @@ def mark_accent(request: Request) -> dict[str, Any]:
                 code=int(http_err.response.status_code), message=str(http_err), length=0
             ),
         )
-    except ConnectionError as conn_err:
+    except ConnectError as conn_err:
         response = Response(
             status=500,
             result=[],
