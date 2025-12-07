@@ -2,6 +2,7 @@
 An API that mark accent of given query text
 """
 
+import logging
 import string
 from typing import Any
 
@@ -20,6 +21,9 @@ from pydantic import BaseModel, Field
 
 from api.dependencies import get_http_client
 from api.furigana_marker import Request, SingleWordResultObject, mark_furigana
+
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
 
 tags_metadata = [
     {
@@ -186,12 +190,12 @@ class Response(BaseModel):
 
 router = APIRouter()
 
-
 async def get_ojad_result(
     query_text: str,
     client: httpx.AsyncClient,
 ) -> tuple[str, list[dict[str, Any]]]:
     """Parse cleaned query_text to OJAD, concate whole result as a list"""
+    logger.debug(f"[OJAD] Start fetching for: {query_text}")
 
     # URL to suzukikun(すずきくん)
     url = "https://www.gavo.t.u-tokyo.ac.jp/ojad/phrasing/index"
@@ -211,21 +215,31 @@ async def get_ojad_result(
     }
 
     # Send a POST and receive the website html code
-    response = await client.post(url, data=data)
-    response.raise_for_status()  # 若 HTTP 非 200 會直接丟例外
+    try:
+        response = await client.post(url, data=data)
+        response.raise_for_status()
+        logger.debug(f"[OJAD] Status Code: {response.status_code}")
+    except Exception as e:
+        logger.error(f"[OJAD] Request Failed: {e}")
+        raise e
+        
     website = response.text
 
     # use Beautiful Soup to parse the received html file
     soup = BeautifulSoup(website, "html.parser")
 
-    # Fetch the required tags, which are phrasing_text and phrasing_subscript
+    # Fetch the required tags
     phrasing_texts = soup.find_all("div", attrs={"class": "phrasing_text"})
     phrasing_subscripts = soup.find_all("div", attrs={"class": "phrasing_subscript"})
 
     paragraph = ""
     ojad_results = []
+    
+    if not phrasing_texts:
+        logger.warning("[OJAD] Warning: No phrasing_texts found in HTML!")
+
     for furigana, surface in zip(phrasing_texts, phrasing_subscripts):
-        # Fetch subscript text (in the first span tag, final tag is the halt sign)
+        # Fetch subscript text
         phrase = surface.find_all("span", recursive=False)
         sentence = ""
         for p in phrase:
@@ -242,6 +256,7 @@ async def get_ojad_result(
             elif moji["class"][0] == "accent_top":
                 accent = 2
             ojad_results.append({"text": moji.get_text(), "accent": accent})
+    
     return paragraph, ojad_results
 
 
@@ -250,45 +265,50 @@ async def mark_accent(
     request: Request, client: httpx.AsyncClient = Depends(get_http_client)
 ) -> dict[str, Any]:
     """Receive POST request, return a JSON response"""
+    logger.info(f"[API] Received Request Text: {request.text}")
     try:
         query_text = neologdn.normalize(request.text, tilde="normalize")
+        
+        # 1. 呼叫 Yahoo Furigana
         furigana_response = await mark_furigana(Request(text=query_text), client)
-
-        furigana_results: list[dict[str, str]] = furigana_response["result"]
-
+        
+        # 檢查 Yahoo 回傳
+        if not furigana_response or "result" not in furigana_response:
+            logger.warning(f"Yahoo Response Empty or Invalid: {furigana_response}")
+             # 如果 Yahoo 沒東西，這裡就會報錯或導致後面空值
+        
+        furigana_results: list[dict[str, Any]] = furigana_response.get("result", [])
+        logger.debug(f"Yahoo Results Count: {len(furigana_results)}")
+        
+        # 2. 呼叫 OJAD
         ojad_surface, ojad_results = await get_ojad_result(query_text, client)
-
-        # For debug use
-        # print(furigana_results)
-        # print('='*20)
-        # print(ojad_results)
 
         final_response_results = []
         ojad_idx_cnt = 0
-        for furigana_result in furigana_results:
+        
+        logger.debug(f"🔍 [Type Check] furigana_results type: {type(furigana_results)}")
+        logger.debug(f"🔍 [Data Check] furigana_results sample (first item): {furigana_results[0] if furigana_results else 'Empty'}")
+
+        for i, furigana_result in enumerate(furigana_results):
+            logger.debug(f"  🔍 [Type Check] Item [{i}] type: {type(furigana_result)}")
+            logger.debug(f"  🔍 [Data Check] Item keys: {furigana_result.keys()}")
             yahoo_furigana = furigana_result["furigana"]
             yahoo_furigana_hira = jaconv.kata2hira(yahoo_furigana)
             yahoo_surface = furigana_result["surface"]
             accents: list[AccentInfo] = []
 
-            # If query sub-text contains non-kana and non-kanji words,
-            # we should ignore it
-            # Including alphabet and punchutation and others
-            # For punctuation marks, since Yahoo will hold the original query text
-            # While OJAD may replace or remove the punctuation marks
-            # Therefore we only reserve the punctuation marks from Yahoo
+            logger.debug(f"--- Processing Yahoo Word [{i}]: {yahoo_surface} ({yahoo_furigana}) ---")
+
+            # If query sub-text contains non-kana and non-kanji words, ignore it
             if "subword" not in furigana_result and any(
                 not is_kana_or_kanji(chr) for chr in yahoo_furigana
             ):
-                # print(
-                #     f" Successfully processing {yahoo_furigana}"
-                #     f"\t with {yahoo_furigana}"
-                # )
+                logger.debug(" -> Skipped (Not Kana/Kanji)")
                 accents.append(
                     AccentInfo(
                         furigana=yahoo_surface,
                         accent_marking_type=0,
-                        length=len(yahoo_surface),  # 新增 length
+                        length=len(yahoo_surface),
                     )
                 )
                 final_response_results.append(
@@ -299,39 +319,48 @@ async def mark_accent(
                 continue
 
             # Remove all mismatching prefix
-            # Note that sometimes OJAD will transform katagana to hiragana,
-            # so make sure we're matching with same type
             ojad_idx = ojad_idx_cnt
+            
+            # DEBUG matching logic
+            if ojad_idx < len(ojad_results):
+                ojad_current_hira = jaconv.kata2hira(ojad_results[ojad_idx]["text"])
+                logger.debug(f" -> Comparing Yahoo '{yahoo_furigana_hira}' vs OJAD '{ojad_current_hira}'")
+            else:
+                logger.warning(f" -> OJAD Index Out of Bounds ({ojad_idx})")
+
             while ojad_idx < len(ojad_results) and not yahoo_furigana_hira.startswith(
                 jaconv.kata2hira(ojad_results[ojad_idx]["text"])
             ):
                 ojad_idx += 1
 
-            # ctch the furigana from Yahoo with OJAD results
+            # catch the furigana from Yahoo with OJAD results
             ojad_furigana = ""
-            while len(ojad_furigana) < len(yahoo_furigana) and ojad_idx < len(
-                ojad_results
-            ):
-                ojad_text = ojad_results[ojad_idx]["text"]
+            temp_accents = [] # Use temp list to avoid partial data
+            
+            # Backup index
+            temp_ojad_idx = ojad_idx
+
+            while len(ojad_furigana) < len(yahoo_furigana) and temp_ojad_idx < len(ojad_results):
+                ojad_text = ojad_results[temp_ojad_idx]["text"]
                 ojad_furigana += ojad_text
-                accents.append(
+                temp_accents.append(
                     AccentInfo(
                         furigana=ojad_text,
-                        accent_marking_type=ojad_results[ojad_idx]["accent"],
-                        length=len(ojad_text),  # 新增 length
+                        accent_marking_type=ojad_results[temp_ojad_idx]["accent"],
+                        length=len(ojad_text),
                     )
                 )
+                temp_ojad_idx += 1
 
-                ojad_idx += 1
-
-            # If we successfully match the furigana from Yahoo with OJAD results
+            # If match success
             if len(ojad_furigana) == len(yahoo_furigana) and jaconv.kata2hira(
                 ojad_furigana
             ) == jaconv.kata2hira(yahoo_furigana):
-                print(
-                    f"Successfully processing {ojad_furigana} \t with {yahoo_furigana}"
-                )
+                logger.debug(f" -> MATCHED! OJAD: {ojad_furigana}")
+                accents.extend(temp_accents) # Confirm accents
+                
                 # Build accent info list
+                
                 accent_info_list = []
                 yahoo_furigana_idx = 0
                 for idx, accent in enumerate(accents):
@@ -346,9 +375,8 @@ async def mark_accent(
                     )
                     yahoo_furigana_idx += accent.length
 
-                # Update ojad_idx_cnt
-                ojad_idx_cnt = ojad_idx
-                # Build final response result
+                ojad_idx_cnt = temp_ojad_idx # Update global index
+
                 if "subword" not in furigana_result:
                     final_response_results.append(
                         SingleWordAccentResultObject(
@@ -359,61 +387,34 @@ async def mark_accent(
                     )
                 else:
                     yahoo_subword = furigana_result["subword"]
+                    if len(yahoo_subword) > 0:
+                     logger.debug(f"    🔍 [Type Check] yahoo_subword element type: {type(yahoo_subword[0])}")
+                     logger.debug(f"    🔍 [Data Check] yahoo_subword content: {yahoo_subword}")
                     final_response_results.append(
                         MultiWordAccentResultObject(
                             furigana=yahoo_furigana,
                             surface=yahoo_surface,
                             accent=accent_info_list,
                             subword=[
-                                SingleWordResultObject(furigana=s, surface=s)
+                                SingleWordResultObject(furigana=s['furigana'], surface=s['surface'])
                                 for s in yahoo_subword
                             ],
                         )
                     )
             else:
-                # [TODO] Do our best to give correct result
-                # If we cannot make it, we should return some error message
-                print(
-                    f"[ERROR] Some error occured when processing "
-                    f"{ojad_furigana} \t with {yahoo_furigana}"
-                )
+                # [ERROR BLOCK]
+                logger.error(f" -> MATCH FAILED. Yahoo: {yahoo_furigana} vs OJAD Assembly: {ojad_furigana}")
+                # 即使失敗，也要讓迴圈繼續，或者考慮怎麼處理錯誤
+                # 目前程式碼遇到錯誤就沒有 append result，所以回傳會少東西
 
         response = Response(status=200, result=final_response_results)
 
-    except ReadTimeout as time_err:
-        response = Response(
-            status=504,
-            result=[],
-            error=ErrorInfo(code=504, message=f"Request Timeout: {time_err}", length=0),
-        )
-    except TooManyRedirects as redirect_err:
-        response = Response(
-            status=500,
-            result=[],
-            error=ErrorInfo(
-                code=500, message=f"Too many redirects: {redirect_err}", length=0
-            ),
-        )
-    except HTTPStatusError as http_err:
-        response = Response(
-            status=int(http_err.response.status_code),
-            result=[],
-            error=ErrorInfo(
-                code=int(http_err.response.status_code), message=str(http_err), length=0
-            ),
-        )
-    except ConnectError as conn_err:
-        response = Response(
-            status=500,
-            result=[],
-            error=ErrorInfo(
-                code=500, message=f"Connection error: {conn_err}", length=0
-            ),
-        )
     except Exception as e:
+        import traceback
+        traceback.print_exc() # 把完整錯誤印出來
         response = Response(
             status=500,
             result=[],
-            error=ErrorInfo(code=500, message=f"Non-usual error occurs: {e}", length=0),
+            error=ErrorInfo(code=500, message=f"Error: {e}", length=0),
         )
     return response.model_dump()
