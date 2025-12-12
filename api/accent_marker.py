@@ -277,7 +277,7 @@ async def mark_accent(
             logger.warning(f"Yahoo Response Empty or Invalid: {furigana_response}")
              # 如果 Yahoo 沒東西，這裡就會報錯或導致後面空值
         
-        furigana_results: list[dict[str, Any]] = furigana_response.get("result", [])
+        furigana_results: list[dict[str, str]] = furigana_response.get("result", [])
         logger.debug(f"Yahoo Results Count: {len(furigana_results)}")
         
         # 2. 呼叫 OJAD
