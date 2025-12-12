@@ -11,18 +11,14 @@ import jaconv
 import neologdn
 from bs4 import BeautifulSoup
 from fastapi import APIRouter, Depends
-from httpx import (
-    ConnectError,
-    HTTPStatusError,
-    ReadTimeout,
-    TooManyRedirects,
-)
 from pydantic import BaseModel, Field
 
 from api.dependencies import get_http_client
 from api.furigana_marker import Request, SingleWordResultObject, mark_furigana
 
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logging.basicConfig(
+    level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s'
+)
 logger = logging.getLogger(__name__)
 
 tags_metadata = [
@@ -277,7 +273,7 @@ async def mark_accent(
             logger.warning(f"Yahoo Response Empty or Invalid: {furigana_response}")
              # 如果 Yahoo 沒東西，這裡就會報錯或導致後面空值
         
-        furigana_results: list[dict[str, str]] = furigana_response.get("result", [])
+        furigana_results: list[dict[str, Any]] = furigana_response.get("result", [])
         logger.debug(f"Yahoo Results Count: {len(furigana_results)}")
         
         # 2. 呼叫 OJAD
@@ -287,7 +283,10 @@ async def mark_accent(
         ojad_idx_cnt = 0
         
         logger.debug(f"🔍 [Type Check] furigana_results type: {type(furigana_results)}")
-        logger.debug(f"🔍 [Data Check] furigana_results sample (first item): {furigana_results[0] if furigana_results else 'Empty'}")
+        logger.debug(
+            "[Data Check] furigana_results sample (first item): "
+            f"{furigana_results[0] if furigana_results else 'Empty'}"
+        )
 
         for i, furigana_result in enumerate(furigana_results):
             logger.debug(f"  🔍 [Type Check] Item [{i}] type: {type(furigana_result)}")
@@ -297,7 +296,9 @@ async def mark_accent(
             yahoo_surface = furigana_result["surface"]
             accents: list[AccentInfo] = []
 
-            logger.debug(f"--- Processing Yahoo Word [{i}]: {yahoo_surface} ({yahoo_furigana}) ---")
+            logger.debug(
+                f"Processing Yahoo Word [{i}]: {yahoo_surface} ({yahoo_furigana})"
+            )
 
             # If query sub-text contains non-kana and non-kanji words, ignore it
             if "subword" not in furigana_result and any(
@@ -324,7 +325,10 @@ async def mark_accent(
             # DEBUG matching logic
             if ojad_idx < len(ojad_results):
                 ojad_current_hira = jaconv.kata2hira(ojad_results[ojad_idx]["text"])
-                logger.debug(f" -> Comparing Yahoo '{yahoo_furigana_hira}' vs OJAD '{ojad_current_hira}'")
+                logger.debug(
+                    "-> Comparing Yahoo '{yahoo_furigana_hira}'"
+                    f" vs OJAD '{ojad_current_hira}'"
+                )
             else:
                 logger.warning(f" -> OJAD Index Out of Bounds ({ojad_idx})")
 
@@ -340,7 +344,8 @@ async def mark_accent(
             # Backup index
             temp_ojad_idx = ojad_idx
 
-            while len(ojad_furigana) < len(yahoo_furigana) and temp_ojad_idx < len(ojad_results):
+            while (len(ojad_furigana) < len(yahoo_furigana) and 
+                temp_ojad_idx < len(ojad_results)):
                 ojad_text = ojad_results[temp_ojad_idx]["text"]
                 ojad_furigana += ojad_text
                 temp_accents.append(
@@ -388,22 +393,32 @@ async def mark_accent(
                 else:
                     yahoo_subword = furigana_result["subword"]
                     if len(yahoo_subword) > 0:
-                     logger.debug(f"    🔍 [Type Check] yahoo_subword element type: {type(yahoo_subword[0])}")
-                     logger.debug(f"    🔍 [Data Check] yahoo_subword content: {yahoo_subword}")
+                        logger.debug(
+                            "[Type Check] yahoo_subword element type: "
+                            f"{type(yahoo_subword[0])}"
+                        )
+                        logger.debug(
+                            f"[Data Check] yahoo_subword content: {yahoo_subword}"
+                        )
                     final_response_results.append(
                         MultiWordAccentResultObject(
                             furigana=yahoo_furigana,
                             surface=yahoo_surface,
                             accent=accent_info_list,
                             subword=[
-                                SingleWordResultObject(furigana=s['furigana'], surface=s['surface'])
+                                SingleWordResultObject(
+                                    furigana=s['furigana'], surface=s['surface']
+                                )
                                 for s in yahoo_subword
                             ],
                         )
                     )
             else:
                 # [ERROR BLOCK]
-                logger.error(f" -> MATCH FAILED. Yahoo: {yahoo_furigana} vs OJAD Assembly: {ojad_furigana}")
+                logger.error(
+                    "-> MATCH FAILED."
+                    f"Yahoo: {yahoo_furigana} vs OJAD Assembly: {ojad_furigana}"
+                )
                 # 即使失敗，也要讓迴圈繼續，或者考慮怎麼處理錯誤
                 # 目前程式碼遇到錯誤就沒有 append result，所以回傳會少東西
 
