@@ -16,9 +16,6 @@ from pydantic import BaseModel, Field
 from api.dependencies import get_http_client
 from api.furigana_marker import Request, SingleWordResultObject, mark_furigana
 
-logging.basicConfig(
-    level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
-)
 logger = logging.getLogger(__name__)
 
 tags_metadata = [

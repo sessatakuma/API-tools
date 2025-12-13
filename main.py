@@ -7,6 +7,7 @@ An API interface that provide two functionalities
 (5) Sentence Query  (/api/SentenceQuery/)
 """
 
+import logging
 from contextlib import asynccontextmanager
 from typing import AsyncGenerator
 
@@ -53,3 +54,9 @@ app.include_router(furigana_marker.router, prefix="/api")
 app.include_router(usage_query.router, prefix="/api")
 app.include_router(dict_query.router, prefix="/api")
 app.include_router(sentence_query.router, prefix="/api")
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] [%(name)s:%(lineno)d] - %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+)
