@@ -390,7 +390,7 @@ async def mark_accent(
                         )
                     )
                 else:
-                    yahoo_subword = furigana_result["subword"]
+                    yahoo_subword: list[dict[str, str]] = furigana_result["subword"]
                     if len(yahoo_subword) > 0:
                         logger.debug(
                             "[Type Check] yahoo_subword element type: "
