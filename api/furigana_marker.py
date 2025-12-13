@@ -20,7 +20,7 @@ tags_metadata = [
 ]
 
 
-class Request(BaseModel):
+class RequestBody(BaseModel):
     """Class representing a request object"""
 
     text: str = Field(description="The text to query")
@@ -79,12 +79,11 @@ else:
 
 
 @router.post("/MarkFurigana/", tags=["MarkFurigana"], response_model=Response)
-async def mark_furigana(
-    request: Request,
-    client: httpx.AsyncClient = Depends(get_http_client),  # 共用 client
+async def mark_furigana_service(
+    query_text: str,
+    client: httpx.AsyncClient,
 ) -> dict[str, Any]:
     """Receive POST request, return a JSON response"""
-    query_text = request.text
 
     # 輸入
     headers = {
@@ -161,3 +160,10 @@ async def mark_furigana(
             )
 
     return Response(status=200, result=parsed_result).model_dump()
+
+
+async def mark_furigana(
+    request: RequestBody,
+    client: httpx.AsyncClient = Depends(get_http_client),
+) -> dict[str, Any]:
+    return await mark_furigana_service(request.text, client)

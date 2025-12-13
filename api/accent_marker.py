@@ -14,7 +14,11 @@ from fastapi import APIRouter, Depends
 from pydantic import BaseModel, Field
 
 from api.dependencies import get_http_client
-from api.furigana_marker import Request, SingleWordResultObject, mark_furigana
+from api.furigana_marker import (
+    RequestBody,
+    SingleWordResultObject,
+    mark_furigana_service,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -256,25 +260,22 @@ async def get_ojad_result(
 
 @router.post("/MarkAccent/", tags=["MarkAccent"], response_model=Response)
 async def mark_accent(
-    request: Request, client: httpx.AsyncClient = Depends(get_http_client)
+    request: RequestBody, client: httpx.AsyncClient = Depends(get_http_client)
 ) -> dict[str, Any]:
     """Receive POST request, return a JSON response"""
     logger.info(f"[API] Received Request Text: {request.text}")
     try:
         query_text = neologdn.normalize(request.text, tilde="normalize")
 
-        # 1. 呼叫 Yahoo Furigana
-        furigana_response = await mark_furigana(Request(text=query_text), client)
+        furigana_response = await mark_furigana_service(query_text, client)
 
         # 檢查 Yahoo 回傳
         if not furigana_response or "result" not in furigana_response:
             logger.warning(f"Yahoo Response Empty or Invalid: {furigana_response}")
-            # 如果 Yahoo 沒東西，這裡就會報錯或導致後面空值
 
         furigana_results: list[dict[str, Any]] = furigana_response.get("result", [])
         logger.debug(f"Yahoo Results Count: {len(furigana_results)}")
 
-        # 2. 呼叫 OJAD
         ojad_surface, ojad_results = await get_ojad_result(query_text, client)
 
         final_response_results = []
@@ -418,15 +419,13 @@ async def mark_accent(
                     "-> MATCH FAILED."
                     f"Yahoo: {yahoo_furigana} vs OJAD Assembly: {ojad_furigana}"
                 )
-                # 即使失敗，也要讓迴圈繼續，或者考慮怎麼處理錯誤
-                # 目前程式碼遇到錯誤就沒有 append result，所以回傳會少東西
 
         response = Response(status=200, result=final_response_results)
 
     except Exception as e:
         import traceback
 
-        traceback.print_exc()  # 把完整錯誤印出來
+        traceback.print_exc()
         response = Response(
             status=500,
             result=None,
