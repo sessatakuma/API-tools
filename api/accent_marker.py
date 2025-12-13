@@ -17,7 +17,7 @@ from api.dependencies import get_http_client
 from api.furigana_marker import Request, SingleWordResultObject, mark_furigana
 
 logging.basicConfig(
-    level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s'
+    level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
 )
 logger = logging.getLogger(__name__)
 
@@ -186,6 +186,7 @@ class Response(BaseModel):
 
 router = APIRouter()
 
+
 async def get_ojad_result(
     query_text: str,
     client: httpx.AsyncClient,
@@ -218,7 +219,7 @@ async def get_ojad_result(
     except Exception as e:
         logger.error(f"[OJAD] Request Failed: {e}")
         raise e
-        
+
     website = response.text
 
     # use Beautiful Soup to parse the received html file
@@ -230,7 +231,7 @@ async def get_ojad_result(
 
     paragraph = ""
     ojad_results = []
-    
+
     if not phrasing_texts:
         logger.warning("[OJAD] Warning: No phrasing_texts found in HTML!")
 
@@ -252,7 +253,7 @@ async def get_ojad_result(
             elif moji["class"][0] == "accent_top":
                 accent = 2
             ojad_results.append({"text": moji.get_text(), "accent": accent})
-    
+
     return paragraph, ojad_results
 
 
@@ -264,24 +265,24 @@ async def mark_accent(
     logger.info(f"[API] Received Request Text: {request.text}")
     try:
         query_text = neologdn.normalize(request.text, tilde="normalize")
-        
+
         # 1. 呼叫 Yahoo Furigana
         furigana_response = await mark_furigana(Request(text=query_text), client)
-        
+
         # 檢查 Yahoo 回傳
         if not furigana_response or "result" not in furigana_response:
             logger.warning(f"Yahoo Response Empty or Invalid: {furigana_response}")
-             # 如果 Yahoo 沒東西，這裡就會報錯或導致後面空值
-        
+            # 如果 Yahoo 沒東西，這裡就會報錯或導致後面空值
+
         furigana_results: list[dict[str, Any]] = furigana_response.get("result", [])
         logger.debug(f"Yahoo Results Count: {len(furigana_results)}")
-        
+
         # 2. 呼叫 OJAD
         ojad_surface, ojad_results = await get_ojad_result(query_text, client)
 
         final_response_results = []
         ojad_idx_cnt = 0
-        
+
         logger.debug(f"🔍 [Type Check] furigana_results type: {type(furigana_results)}")
         logger.debug(
             "[Data Check] furigana_results sample (first item): "
@@ -321,7 +322,7 @@ async def mark_accent(
 
             # Remove all mismatching prefix
             ojad_idx = ojad_idx_cnt
-            
+
             # DEBUG matching logic
             if ojad_idx < len(ojad_results):
                 ojad_current_hira = jaconv.kata2hira(ojad_results[ojad_idx]["text"])
@@ -339,13 +340,14 @@ async def mark_accent(
 
             # catch the furigana from Yahoo with OJAD results
             ojad_furigana = ""
-            temp_accents = [] # Use temp list to avoid partial data
-            
+            temp_accents = []  # Use temp list to avoid partial data
+
             # Backup index
             temp_ojad_idx = ojad_idx
 
-            while (len(ojad_furigana) < len(yahoo_furigana) and 
-                temp_ojad_idx < len(ojad_results)):
+            while len(ojad_furigana) < len(yahoo_furigana) and temp_ojad_idx < len(
+                ojad_results
+            ):
                 ojad_text = ojad_results[temp_ojad_idx]["text"]
                 ojad_furigana += ojad_text
                 temp_accents.append(
@@ -362,10 +364,10 @@ async def mark_accent(
                 ojad_furigana
             ) == jaconv.kata2hira(yahoo_furigana):
                 logger.debug(f" -> MATCHED! OJAD: {ojad_furigana}")
-                accents.extend(temp_accents) # Confirm accents
-                
+                accents.extend(temp_accents)  # Confirm accents
+
                 # Build accent info list
-                
+
                 accent_info_list = []
                 yahoo_furigana_idx = 0
                 for idx, accent in enumerate(accents):
@@ -380,7 +382,7 @@ async def mark_accent(
                     )
                     yahoo_furigana_idx += accent.length
 
-                ojad_idx_cnt = temp_ojad_idx # Update global index
+                ojad_idx_cnt = temp_ojad_idx  # Update global index
 
                 if "subword" not in furigana_result:
                     final_response_results.append(
@@ -407,7 +409,7 @@ async def mark_accent(
                             accent=accent_info_list,
                             subword=[
                                 SingleWordResultObject(
-                                    furigana=s['furigana'], surface=s['surface']
+                                    furigana=s["furigana"], surface=s["surface"]
                                 )
                                 for s in yahoo_subword
                             ],
@@ -426,7 +428,8 @@ async def mark_accent(
 
     except Exception as e:
         import traceback
-        traceback.print_exc() # 把完整錯誤印出來
+
+        traceback.print_exc()  # 把完整錯誤印出來
         response = Response(
             status=500,
             result=[],
