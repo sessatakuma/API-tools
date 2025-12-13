@@ -172,8 +172,8 @@ class Response(BaseModel):
     status: int = Field(
         default=200, description="Status code of response align with RFC 9110"
     )
-    result: list[SingleWordAccentResultObject | MultiWordAccentResultObject] = Field(
-        description="A list contains marked results"
+    result: list[SingleWordAccentResultObject | MultiWordAccentResultObject] | None = (
+        Field(description="A list contains marked results")
     )
     error: ErrorInfo | None = Field(
         default=None,
@@ -429,7 +429,7 @@ async def mark_accent(
         traceback.print_exc()  # 把完整錯誤印出來
         response = Response(
             status=500,
-            result=[],
+            result=None,
             error=ErrorInfo(code=500, message=f"Error: {e}", length=0),
         )
     return response.model_dump()

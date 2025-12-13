@@ -58,7 +58,7 @@ class Response(BaseModel):
     status: int = Field(
         default=200, description="Status code of response align with RFC 9110"
     )
-    result: list[SingleWordResultObject | MultiWordResultObject] = Field(
+    result: list[SingleWordResultObject | MultiWordResultObject] | None = Field(
         description="A list contains marked results"
     )
     error: ErrorInfo | None = Field(
@@ -105,21 +105,21 @@ async def mark_furigana(
     except httpx.TimeoutException:
         return Response(
             status=408,
-            result=[],
+            result=None,
             error=ErrorInfo(code=408, message="Yahoo API request timed out"),
         ).model_dump()
 
     except httpx.HTTPError as e:
         return Response(
             status=500,
-            result=[],
+            result=None,
             error=ErrorInfo(code=500, message=f"HTTP error: {str(e)}"),
         ).model_dump()
 
     if response.status_code != 200:
         return Response(
             status=response.status_code,
-            result=[],
+            result=None,
             error=ErrorInfo(
                 code=response.status_code,
                 message=f"Yahoo API request failed with status {response.status_code}",
@@ -130,7 +130,7 @@ async def mark_furigana(
     if "result" not in result or "word" not in result["result"]:
         return Response(
             status=500,
-            result=[],
+            result=None,
             error=ErrorInfo(
                 code=500, message="Unexpected response format from Yahoo API"
             ),
