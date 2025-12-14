@@ -423,9 +423,7 @@ async def mark_accent(
         response = Response(status=200, result=final_response_results)
 
     except Exception as e:
-        import traceback
-
-        traceback.print_exc()
+        logger.exception(f"Unexpected error occurred: {request.text}")
         response = Response(
             status=500,
             result=None,
