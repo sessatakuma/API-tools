@@ -4,7 +4,7 @@ An API that mark accent of given query text
 
 import logging
 import string
-from typing import Any
+from typing import Any, cast
 
 import httpx
 import jaconv
@@ -15,6 +15,7 @@ from pydantic import BaseModel, Field
 
 from api.dependencies import get_http_client
 from api.furigana_marker import (
+    MultiWordResultObject,
     RequestBody,
     SingleWordResultObject,
     mark_furigana_service,
@@ -267,32 +268,33 @@ async def mark_accent(
     try:
         query_text = neologdn.normalize(request.text, tilde="normalize")
 
-        furigana_response = await mark_furigana_service(query_text, client)
+        furigana_response = cast(
+            Response, await mark_furigana_service(query_text, client)
+        )
 
         # 檢查 Yahoo 回傳
-        if not furigana_response or "result" not in furigana_response:
+        if furigana_response.status != 200 or not furigana_response.result:
             logger.warning(f"Yahoo Response Empty or Invalid: {furigana_response}")
 
-        furigana_results: list[dict[str, Any]] = furigana_response.get("result", [])
-        logger.debug(f"Yahoo Results Count: {len(furigana_results)}")
+        furigana_results = furigana_response.result or []
+        logger.debug(f"Yahoo Results Count: {len(furigana_results or [])}")
 
         ojad_surface, ojad_results = await get_ojad_result(query_text, client)
 
         final_response_results = []
         ojad_idx_cnt = 0
 
-        logger.debug(f"🔍 [Type Check] furigana_results type: {type(furigana_results)}")
         logger.debug(
-            "[Data Check] furigana_results sample (first item): "
+            "🔍 [Data Check] First item:"
             f"{furigana_results[0] if furigana_results else 'Empty'}"
         )
 
         for i, furigana_result in enumerate(furigana_results):
-            logger.debug(f"  🔍 [Type Check] Item [{i}] type: {type(furigana_result)}")
-            logger.debug(f"  🔍 [Data Check] Item keys: {furigana_result.keys()}")
-            yahoo_furigana = furigana_result["furigana"]
+            yahoo_furigana = furigana_result.furigana
+            yahoo_surface = furigana_result.surface
+
+            is_multi_word = isinstance(furigana_result, MultiWordResultObject)
             yahoo_furigana_hira = jaconv.kata2hira(yahoo_furigana)
-            yahoo_surface = furigana_result["surface"]
             accents: list[AccentInfo] = []
 
             logger.debug(
@@ -300,7 +302,7 @@ async def mark_accent(
             )
 
             # If query sub-text contains non-kana and non-kanji words, ignore it
-            if "subword" not in furigana_result and any(
+            if not is_multi_word and any(
                 not is_kana_or_kanji(chr) for chr in yahoo_furigana
             ):
                 logger.debug(" -> Skipped (Not Kana/Kanji)")
@@ -382,16 +384,8 @@ async def mark_accent(
 
                 ojad_idx_cnt = temp_ojad_idx  # Update global index
 
-                if "subword" not in furigana_result:
-                    final_response_results.append(
-                        SingleWordAccentResultObject(
-                            furigana=yahoo_furigana,
-                            surface=yahoo_surface,
-                            accent=accent_info_list,
-                        )
-                    )
-                else:
-                    yahoo_subword: list[dict[str, str]] = furigana_result["subword"]
+                if isinstance(furigana_result, MultiWordAccentResultObject):
+                    yahoo_subword = furigana_result.subword  # ignore
                     if len(yahoo_subword) > 0:
                         logger.debug(
                             "[Type Check] yahoo_subword element type: "
@@ -407,10 +401,18 @@ async def mark_accent(
                             accent=accent_info_list,
                             subword=[
                                 SingleWordResultObject(
-                                    furigana=s["furigana"], surface=s["surface"]
+                                    furigana=s.furigana, surface=s.surface
                                 )
                                 for s in yahoo_subword
                             ],
+                        )
+                    )
+                else:
+                    final_response_results.append(
+                        SingleWordAccentResultObject(
+                            furigana=yahoo_furigana,
+                            surface=yahoo_surface,
+                            accent=accent_info_list,
                         )
                     )
             else:

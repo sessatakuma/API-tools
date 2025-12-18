@@ -3,7 +3,6 @@ An API that mark furigana of given query text
 """
 
 import os
-from typing import Any
 
 import httpx
 import yaml
@@ -82,8 +81,8 @@ else:
 async def mark_furigana_service(
     query_text: str,
     client: httpx.AsyncClient,
-) -> dict[str, Any]:
-    """Receive POST request, return a JSON response"""
+) -> Response:
+    """Receive POST request, return a Response object"""
 
     # 輸入
     headers = {
@@ -106,14 +105,14 @@ async def mark_furigana_service(
             status=408,
             result=None,
             error=ErrorInfo(code=408, message="Yahoo API request timed out"),
-        ).model_dump()
+        )
 
     except httpx.HTTPError as e:
         return Response(
             status=500,
             result=None,
             error=ErrorInfo(code=500, message=f"HTTP error: {str(e)}"),
-        ).model_dump()
+        )
 
     if response.status_code != 200:
         return Response(
@@ -123,7 +122,7 @@ async def mark_furigana_service(
                 code=response.status_code,
                 message=f"Yahoo API request failed with status {response.status_code}",
             ),
-        ).model_dump()
+        )
 
     result = response.json()
     if "result" not in result or "word" not in result["result"]:
@@ -133,7 +132,7 @@ async def mark_furigana_service(
             error=ErrorInfo(
                 code=500, message="Unexpected response format from Yahoo API"
             ),
-        ).model_dump()
+        )
 
     words = result["result"]["word"]
     parsed_result: list[SingleWordResultObject | MultiWordResultObject] = []
@@ -159,11 +158,11 @@ async def mark_furigana_service(
                 )
             )
 
-    return Response(status=200, result=parsed_result).model_dump()
+    return Response(status=200, result=parsed_result)
 
 
 async def mark_furigana(
     request: RequestBody,
     client: httpx.AsyncClient = Depends(get_http_client),
-) -> dict[str, Any]:
+) -> Response:
     return await mark_furigana_service(request.text, client)
