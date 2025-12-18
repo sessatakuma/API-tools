@@ -19,7 +19,7 @@ tags_metadata = [
 ]
 
 
-class RequestBody(BaseModel):
+class Request(BaseModel):
     """Class representing a request object"""
 
     text: str = Field(description="The text to query")
@@ -77,12 +77,11 @@ else:
         clientid = yaml.safe_load(f)["Yahoo_API_key"]
 
 
-@router.post("/MarkFurigana/", tags=["MarkFurigana"], response_model=Response)
 async def mark_furigana_service(
     query_text: str,
     client: httpx.AsyncClient,
 ) -> Response:
-    """Receive POST request, return a Response object"""
+    """Receive query text, return a Response object"""
 
     # 輸入
     headers = {
@@ -161,8 +160,9 @@ async def mark_furigana_service(
     return Response(status=200, result=parsed_result)
 
 
+@router.post("/MarkFurigana/", tags=["MarkFurigana"], response_model=Response)
 async def mark_furigana(
-    request: RequestBody,
+    request: Request,
     client: httpx.AsyncClient = Depends(get_http_client),
 ) -> Response:
     return await mark_furigana_service(request.text, client)

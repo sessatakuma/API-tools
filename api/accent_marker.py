@@ -16,7 +16,7 @@ from pydantic import BaseModel, Field
 from api.dependencies import get_http_client
 from api.furigana_marker import (
     MultiWordResultObject,
-    RequestBody,
+    Request,
     SingleWordResultObject,
     mark_furigana_service,
 )
@@ -261,7 +261,7 @@ async def get_ojad_result(
 
 @router.post("/MarkAccent/", tags=["MarkAccent"], response_model=Response)
 async def mark_accent(
-    request: RequestBody, client: httpx.AsyncClient = Depends(get_http_client)
+    request: Request, client: httpx.AsyncClient = Depends(get_http_client)
 ) -> dict[str, Any]:
     """Receive POST request, return a JSON response"""
     logger.info(f"[API] Received Request Text: {request.text}")
