@@ -23,7 +23,9 @@ class JWTConfig:
         self._load_config()
 
     def _load_config(self) -> None:
-        """Load public keys and token expiry from secret.yaml or environment variables"""
+        """
+        Load public keys and token expiry from secret.yaml or environment variables
+        """
 
         if os.path.exists("secret.yaml"):
             with open("secret.yaml", "r") as f:
