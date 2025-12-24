@@ -11,7 +11,7 @@ from contextlib import asynccontextmanager
 from typing import AsyncGenerator, Awaitable, Callable
 
 import httpx
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.responses import JSONResponse, Response
 
@@ -69,13 +69,22 @@ async def api_authentication_middleware(
         # Store client_id in request state for later use
         request.state.client_id = client_id
         return await call_next(request)
-    except Exception as e:
+    except HTTPException as e:
         return JSONResponse(
             status_code=401,
             content={
                 "error": "Unauthorized",
                 "message": str(e.detail) if hasattr(e, "detail") else str(e),
                 "status": 401,
+            },
+        )
+    except Exception as e:
+        return JSONResponse(
+            status_code=500,
+            content={
+                "error": "Internal Server Error",
+                "message": str(e),
+                "status": 500,
             },
         )
 
