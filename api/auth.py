@@ -10,7 +10,6 @@ import os
 import jwt
 import yaml
 from fastapi import Depends, HTTPException, Request, status
-from pydantic import BaseModel
 
 
 class JWTConfig:
@@ -53,14 +52,6 @@ class JWTConfig:
 
 
 jwt_config = JWTConfig()
-
-
-class TokenPayload(BaseModel):
-    """JWT token payload structure"""
-
-    client_id: str
-    iat: int  # issued at timestamp
-    exp: int  # expiration timestamp
 
 
 async def verify_jwt_token(request: Request) -> str:
