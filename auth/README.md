@@ -56,7 +56,7 @@ uv pip install pyjwt cryptography
 ### Generate Tokens
 
 ```python
-from client_auth import ClientAuth
+from auth.client_auth import ClientAuth
 
 # Initialize with your app name and private key file
 auth = ClientAuth("your_app_name", "./your_app_name_private.pem")
