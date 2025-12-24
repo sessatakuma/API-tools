@@ -23,30 +23,31 @@ class JWTConfig:
         self._load_config()
 
     def _load_config(self) -> None:
-        """Load public keys and token expiry from secret.yaml"""
-        try:
-            if "JWT_SECRET" in os.environ:
-                config_path = os.environ["JWT_SECRET"]
-            else:
-                config_path = "./secret.yaml"
+        """Load public keys and token expiry from secret.yaml or environment variables"""
 
-            with open(config_path, encoding="utf-8") as f:
+        if os.path.exists("secret.yaml"):
+            with open("secret.yaml", "r") as f:
                 config = yaml.safe_load(f)
+            clients = config.get("JWT_CLIENTS", {})
+            for client_id, client_info in clients.items():
+                pub_key = client_info.get("PUB_KEY")
+                if pub_key:
+                    self.public_keys[client_id] = pub_key
 
-            # Load public keys for each client
-            if "clients" in config:
-                for client_id, client_config in config["clients"].items():
-                    if "public_key" in client_config:
-                        self.public_keys[client_id] = client_config["public_key"]
+            self.token_expiry_seconds = config.get("JWT_TOKEN_EXPIRY_SECONDS", 3600)
+        else:
+            # find all env variables satisfy JWT_CLIENT_YOUR_APP_NAME_PUB_KEY
+            for key, value in os.environ.items():
+                if key.startswith("JWT_CLIENT_") and key.endswith("_PUB_KEY"):
+                    client_id = key[len("JWT_CLIENT_") : -len("_PUB_KEY")]
+                    self.public_keys[client_id] = value
 
-            # Load token expiry time if specified
-            if "token_expiry_seconds" in config:
-                self.token_expiry_seconds = config["token_expiry_seconds"]
+            self.token_expiry_seconds = int(
+                os.environ.get("JWT_TOKEN_EXPIRY_SECONDS", 3600)
+            )
 
-        except FileNotFoundError:
-            print("Warning: secret.yaml not found. JWT authentication disabled.")
-        except Exception as e:
-            print(f"Warning: Error loading JWT config: {e}")
+        if not self.public_keys:
+            print("Warning: No JWT public keys loaded. Authentication may fail.")
 
 
 jwt_config = JWTConfig()

@@ -30,18 +30,36 @@ MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA...
 
 ### Step 3: Admin Adds You to the Server
 
-The admin will add your public key to `secret.yaml`:
+The admin needs to register your public key on the server. This can be done in two ways:
+
+#### Option A: Using `secret.yaml` (Local/Standard)
+
+Add the public key to `secret.yaml`:
 
 ```yaml
-clients:
+JWT_CLIENTS:
   your_app_name:
-    public_key: |
+    PUB_KEY: |
       -----BEGIN PUBLIC KEY-----
       (your public key here)
       -----END PUBLIC KEY-----
 ```
 
-Then they'll restart the server.
+#### Option B: Using Environment Variables (Heroku/Cloud)
+
+For platforms like Heroku where files are not persistent, use environment variables:
+
+1.  **Single Client Variable**:
+    Set an environment variable named `JWT_CLIENT_YOUR_APP_NAME_PUB_KEY` (replace `YOUR_APP_NAME` with the actual client ID in uppercase) with the content of the public key.
+
+    ```bash
+    # Example for Heroku
+    heroku config:set JWT_CLIENT_YOUR_APP_NAME_PUB_KEY="-----BEGIN PUBLIC KEY-----
+    ...
+    -----END PUBLIC KEY-----"
+    ```
+
+Then restart the server.
 
 ---
 
