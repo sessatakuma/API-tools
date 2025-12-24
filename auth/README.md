@@ -47,18 +47,14 @@ JWT_CLIENTS:
 
 #### Option B: Using Environment Variables (Heroku/Cloud)
 
-For platforms like Heroku where files are not persistent, use environment variables:
+For platforms like Heroku where files are not persistent, set an environment variable named `JWT_CLIENT_your_app_name_PUB_KEY` (replace `your_app_name` with the actual client ID) with the content of the public key.
 
-1.  **Single Client Variable**:
-    Set an environment variable named `JWT_CLIENT_your_app_name_PUB_KEY` 
-    (replace `your_app_name` with the actual client ID) with the content of the public key.
-
-    ```bash
-    # Example for Heroku
-    heroku config:set JWT_CLIENT_your_app_name_PUB_KEY="-----BEGIN PUBLIC KEY-----
-    ...
-    -----END PUBLIC KEY-----"
-    ```
+```bash
+# Example for Heroku
+heroku config:set JWT_CLIENT_your_app_name_PUB_KEY="-----BEGIN PUBLIC KEY-----
+...
+-----END PUBLIC KEY-----"
+```
 
 Then restart the server.
 
