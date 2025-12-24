@@ -108,7 +108,7 @@ async def verify_jwt_token(request: Request) -> str:
         # Verify signature using the client's public key
         public_key = jwt_config.public_keys[client_id]
         jwt.decode(token, public_key, algorithms=["RS256"])
-            
+
         return client_id
 
     except jwt.ExpiredSignatureError:

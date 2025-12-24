@@ -56,7 +56,7 @@ async def api_authentication_middleware(
 ) -> Response:
     """
     Middleware to authenticate API requests using JWT.
-    
+
     All /api/ requests require a valid JWT token in the Authorization header.
     """
     # Skip authentication for non-API routes
@@ -78,6 +78,7 @@ async def api_authentication_middleware(
                 "status": 401,
             },
         )
+
 
 # Include routers from different modules
 app.include_router(accent_marker.router, prefix="/api")

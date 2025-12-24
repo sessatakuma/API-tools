@@ -3,10 +3,10 @@ Client utility to generate signed JWT tokens for API requests.
 
 Usage:
     from client_auth import ClientAuth
-    
+
     auth = ClientAuth("client_id", "path/to/private_key.pem")
     token = auth.generate_token()
-    
+
     # Use in request header
     headers = {"Authorization": f"Bearer {token}"}
 """
@@ -77,4 +77,4 @@ if __name__ == "__main__":
     print(f"Generated token for client '{client_id}':")
     print(token)
     print("\nUse in request header:")
-    print(f'Authorization: Bearer {token}')
+    print(f"Authorization: Bearer {token}")
