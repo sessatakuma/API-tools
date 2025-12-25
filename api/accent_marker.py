@@ -317,7 +317,7 @@ async def mark_accent(
             if ojad_idx < len(ojad_results):
                 ojad_current_hira = jaconv.kata2hira(ojad_results[ojad_idx]["text"])
                 logger.debug(
-                    "-> Comparing Yahoo '{yahoo_furigana_hira}'"
+                    f"-> Comparing Yahoo '{yahoo_furigana_hira}'"
                     f" vs OJAD '{ojad_current_hira}'"
                 )
             else:
