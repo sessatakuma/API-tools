@@ -15,6 +15,7 @@ from pydantic import BaseModel, Field
 
 from api.dependencies import get_http_client
 from api.furigana_marker import (
+    ErrorInfo,
     MultiWordResultObject,
     Request,
     SingleWordResultObject,
@@ -131,16 +132,6 @@ def is_kana_or_kanji(char: Any) -> bool:
 #     """Class representing a request object"""
 
 #     text: str = Field(description="The text to query")
-
-
-class ErrorInfo(BaseModel):
-    """Class representing an error information"""
-
-    code: int = Field(description="The error code that follows JSON-RPC 2.0")
-    message: str = Field(
-        description="The error message that describe the details of an error"
-    )
-    length: int = Field(description="Length of the furigana")
 
 
 class AccentInfo(BaseModel):
@@ -262,8 +253,8 @@ async def get_ojad_result(
 @router.post("/MarkAccent/", tags=["MarkAccent"], response_model=Response)
 async def mark_accent(
     request: Request, client: httpx.AsyncClient = Depends(get_http_client)
-) -> dict[str, Any]:
-    """Receive POST request, return a JSON response"""
+) -> Response:
+    """Receive POST request, return a Response object"""
     logger.info(f"[API] Received Request Text: {request.text}")
     try:
         query_text = neologdn.normalize(request.text, tilde="normalize")
@@ -273,6 +264,11 @@ async def mark_accent(
         # 檢查 Yahoo 回傳
         if furigana_response.status != 200 or not furigana_response.result:
             logger.warning(f"Yahoo Response Empty or Invalid: {furigana_response}")
+            return Response(
+                status=furigana_response.status,
+                result=None,
+                error=furigana_response.error,
+            )
 
         furigana_results = furigana_response.result or []
         logger.debug(f"Yahoo Results Count: {len(furigana_results or [])}")
@@ -419,14 +415,12 @@ async def mark_accent(
                     "-> MATCH FAILED."
                     f"Yahoo: {yahoo_furigana} vs OJAD Assembly: {ojad_furigana}"
                 )
-
-        response = Response(status=200, result=final_response_results)
+        return Response(status=200, result=final_response_results)
 
     except Exception as e:
         logger.exception(f"Unexpected error occurred: {request.text}")
-        response = Response(
+        return Response(
             status=500,
             result=None,
-            error=ErrorInfo(code=500, message=f"Error: {e}", length=0),
+            error=ErrorInfo(code=500, message=f"Error: {e}"),
         )
-    return response.model_dump()
