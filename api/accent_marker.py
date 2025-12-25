@@ -270,24 +270,20 @@ async def mark_accent(
                 error=furigana_response.error,
             )
 
-        furigana_results = furigana_response.result or []
-        logger.debug(f"Yahoo Results Count: {len(furigana_results or [])}")
+        furigana_results = furigana_response.result
+        logger.debug(f"Yahoo Results Count: {len(furigana_results)}")
 
         ojad_surface, ojad_results = await get_ojad_result(query_text, client)
 
         final_response_results = []
         ojad_idx_cnt = 0
 
-        logger.debug(
-            "🔍 [Data Check] First item:"
-            f"{furigana_results[0] if furigana_results else 'Empty'}"
-        )
+        logger.debug(f"🔍 [Data Check] First item:{furigana_results[0]}")
 
         for i, furigana_result in enumerate(furigana_results):
             yahoo_furigana = furigana_result.furigana
             yahoo_surface = furigana_result.surface
 
-            is_multi_word = isinstance(furigana_result, MultiWordResultObject)
             yahoo_furigana_hira = jaconv.kata2hira(yahoo_furigana)
             accents: list[AccentInfo] = []
 
@@ -296,7 +292,7 @@ async def mark_accent(
             )
 
             # If query sub-text contains non-kana and non-kanji words, ignore it
-            if not is_multi_word and any(
+            if not isinstance(furigana_result, MultiWordResultObject) and any(
                 not is_kana_or_kanji(chr) for chr in yahoo_furigana
             ):
                 logger.debug(" -> Skipped (Not Kana/Kanji)")
