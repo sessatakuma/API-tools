@@ -57,6 +57,7 @@ app.include_router(sentence_query.router, prefix="/api")
 
 logging.basicConfig(
     level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] [%(name)s:%(lineno)d] - %(message)s",
+    format="{asctime} [{levelname:^8s}] {message} ({name}.{module}:{lineno})",
     datefmt="%Y-%m-%d %H:%M:%S",
+    style="{",
 )

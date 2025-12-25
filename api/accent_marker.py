@@ -22,7 +22,7 @@ from api.furigana_marker import (
     mark_furigana,
 )
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("api")
 
 tags_metadata = [
     {
