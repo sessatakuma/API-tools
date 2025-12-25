@@ -4,7 +4,7 @@ An API that mark accent of given query text
 
 import logging
 import string
-from typing import Any, cast
+from typing import Any
 
 import httpx
 import jaconv
@@ -18,7 +18,7 @@ from api.furigana_marker import (
     MultiWordResultObject,
     Request,
     SingleWordResultObject,
-    mark_furigana_service,
+    mark_furigana,
 )
 
 logger = logging.getLogger(__name__)
@@ -268,9 +268,7 @@ async def mark_accent(
     try:
         query_text = neologdn.normalize(request.text, tilde="normalize")
 
-        furigana_response = cast(
-            Response, await mark_furigana_service(query_text, client)
-        )
+        furigana_response = await mark_furigana(Request(text=query_text), client)
 
         # 檢查 Yahoo 回傳
         if furigana_response.status != 200 or not furigana_response.result:

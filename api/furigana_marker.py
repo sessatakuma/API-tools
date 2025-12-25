@@ -77,11 +77,12 @@ else:
         clientid = yaml.safe_load(f)["Yahoo_API_key"]
 
 
-async def mark_furigana_service(
-    query_text: str,
-    client: httpx.AsyncClient,
+@router.post("/MarkFurigana/", tags=["MarkFurigana"], response_model=Response)
+async def mark_furigana(
+    request: Request,
+    client: httpx.AsyncClient = Depends(get_http_client),
 ) -> Response:
-    """Receive query text, return a Response object"""
+    """Receive POST request, return a Response object"""
 
     # 輸入
     headers = {
@@ -93,7 +94,7 @@ async def mark_furigana_service(
         "id": "1234-1",
         "jsonrpc": "2.0",
         "method": "jlp.furiganaservice.furigana",
-        "params": {"q": query_text, "grade": 1},
+        "params": {"q": request.text, "grade": 1},
     }
 
     try:
@@ -158,11 +159,3 @@ async def mark_furigana_service(
             )
 
     return Response(status=200, result=parsed_result)
-
-
-@router.post("/MarkFurigana/", tags=["MarkFurigana"], response_model=Response)
-async def mark_furigana(
-    request: Request,
-    client: httpx.AsyncClient = Depends(get_http_client),
-) -> Response:
-    return await mark_furigana_service(request.text, client)
