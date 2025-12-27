@@ -1,6 +1,6 @@
 import json
 import re
-from typing import Any, Literal, Optional
+from typing import Any, Literal
 
 import httpx
 import jaconv
@@ -86,10 +86,10 @@ class HeadWordResponse(BaseModel):
     status: int = Field(
         default=200, description="Status code of response align with RFC 9110"
     )
-    result: Optional[list[HeadWord]] = Field(
+    result: list[HeadWord] | None = Field(
         description="A list contains headword results"
     )
-    error: Optional[ErrorInfo] = Field(
+    error: ErrorInfo | None = Field(
         default=None,
         description="An object that describe the details of an error when occur",
     )
@@ -101,10 +101,10 @@ class URLResponse(BaseModel):
     status: int = Field(
         default=200, description="Status code of response align with RFC 9110"
     )
-    result: Optional[list[URL]] = Field(
+    result: list[URL] | None = Field(
         description="A list contains URLs for the headwords"
     )
-    error: Optional[ErrorInfo] = Field(
+    error: ErrorInfo | None = Field(
         default=None,
         description="An object that describe the details of an error when occur",
     )
@@ -116,10 +116,10 @@ class IdResponse(BaseModel):
     status: int = Field(
         default=200, description="Status code of response align with RFC 9110"
     )
-    result: Optional[IdDetails] = Field(
+    result: IdDetails | None = Field(
         description="Details of the word with the given headword ID"
     )
-    error: Optional[ErrorInfo] = Field(
+    error: ErrorInfo | None = Field(
         default=None,
         description="An object that describe the details of an error when occur",
     )

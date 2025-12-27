@@ -3,7 +3,6 @@ An API that mark furigana of given query text
 """
 
 import os
-from typing import Any
 
 import httpx
 import yaml
@@ -58,7 +57,7 @@ class Response(BaseModel):
     status: int = Field(
         default=200, description="Status code of response align with RFC 9110"
     )
-    result: list[SingleWordResultObject | MultiWordResultObject] = Field(
+    result: list[SingleWordResultObject | MultiWordResultObject] | None = Field(
         description="A list contains marked results"
     )
     error: ErrorInfo | None = Field(
@@ -81,10 +80,9 @@ else:
 @router.post("/MarkFurigana/", tags=["MarkFurigana"], response_model=Response)
 async def mark_furigana(
     request: Request,
-    client: httpx.AsyncClient = Depends(get_http_client),  # 共用 client
-) -> dict[str, Any]:
-    """Receive POST request, return a JSON response"""
-    query_text = request.text
+    client: httpx.AsyncClient = Depends(get_http_client),
+) -> Response:
+    """Receive POST request, return a Response object"""
 
     # 輸入
     headers = {
@@ -96,7 +94,7 @@ async def mark_furigana(
         "id": "1234-1",
         "jsonrpc": "2.0",
         "method": "jlp.furiganaservice.furigana",
-        "params": {"q": query_text, "grade": 1},
+        "params": {"q": request.text, "grade": 1},
     }
 
     try:
@@ -105,36 +103,36 @@ async def mark_furigana(
     except httpx.TimeoutException:
         return Response(
             status=408,
-            result=[],
+            result=None,
             error=ErrorInfo(code=408, message="Yahoo API request timed out"),
-        ).model_dump()
+        )
 
     except httpx.HTTPError as e:
         return Response(
             status=500,
-            result=[],
+            result=None,
             error=ErrorInfo(code=500, message=f"HTTP error: {str(e)}"),
-        ).model_dump()
+        )
 
     if response.status_code != 200:
         return Response(
             status=response.status_code,
-            result=[],
+            result=None,
             error=ErrorInfo(
                 code=response.status_code,
                 message=f"Yahoo API request failed with status {response.status_code}",
             ),
-        ).model_dump()
+        )
 
     result = response.json()
     if "result" not in result or "word" not in result["result"]:
         return Response(
             status=500,
-            result=[],
+            result=None,
             error=ErrorInfo(
                 code=500, message="Unexpected response format from Yahoo API"
             ),
-        ).model_dump()
+        )
 
     words = result["result"]["word"]
     parsed_result: list[SingleWordResultObject | MultiWordResultObject] = []
@@ -160,4 +158,4 @@ async def mark_furigana(
                 )
             )
 
-    return Response(status=200, result=parsed_result).model_dump()
+    return Response(status=200, result=parsed_result)
