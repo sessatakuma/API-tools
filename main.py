@@ -8,9 +8,9 @@ An API interface that provide two functionalities
 """
 
 import logging
+import secrets
 from contextlib import asynccontextmanager
 from typing import AsyncGenerator
-import secrets
 
 import httpx
 from fastapi import Depends, FastAPI, HTTPException, Security
