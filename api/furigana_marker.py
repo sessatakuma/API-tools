@@ -13,6 +13,8 @@ from pydantic import BaseModel, Field
 
 from api.dependencies import get_http_client
 
+from config.settings import YAHOO_API_KEY
+
 tags_metadata = [
     {
         "name": "MarkFurigana",
@@ -69,11 +71,6 @@ router = APIRouter()
 
 url = "https://jlp.yahooapis.jp/FuriganaService/V2/furigana"
 
-if "Yahoo_API_key" in os.environ:
-    clientid = os.environ["Yahoo_API_key"]
-else:
-    with open("./secret.yaml", encoding="utf-8") as f:
-        clientid = yaml.safe_load(f)["Yahoo_API_key"]
 
 
 @router.post("/MarkFurigana/", tags=["MarkFurigana"], response_model=Response)
@@ -86,7 +83,7 @@ async def mark_furigana(
     # 輸入
     headers = {
         "Content-Type": "application/json",
-        "User-Agent": f"Yahoo AppID: {clientid}",
+        "User-Agent": f"Yahoo AppID: {YAHOO_API_KEY}",
     }
 
     data = {
