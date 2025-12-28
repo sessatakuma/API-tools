@@ -13,5 +13,5 @@ assert ALLOWED_HOSTS, "ALLOWED_HOSTS environment variable is not set"
 ALLOW_ORIGINS: list[str] = os.getenv("ALLOW_ORIGINS", "").split(",")
 assert ALLOW_ORIGINS, "ALLOW_ORIGINS environment variable is not set"
 
-BUILD_API_KEY: str = os.getenv("BUILD_API_KEY", "")
-assert BUILD_API_KEY, "BUILD_API_KEY environment variable is not set"
+X_API_KEY: str = os.getenv("X_API_KEY", "")
+assert X_API_KEY, "X_API_KEY environment variable is not set"

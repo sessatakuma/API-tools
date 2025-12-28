@@ -23,7 +23,7 @@ from slowapi.util import get_remote_address
 from starlette.status import HTTP_403_FORBIDDEN
 
 from api import accent_marker, dict_query, furigana_marker, sentence_query, usage_query
-from config.settings import ALLOW_ORIGINS, ALLOWED_HOSTS, BUILD_API_KEY
+from config.settings import ALLOW_ORIGINS, ALLOWED_HOSTS, X_API_KEY
 
 
 @asynccontextmanager
@@ -74,7 +74,7 @@ app.add_middleware(SlowAPIMiddleware)
 # API Key Header for build API key authentication
 api_key_header = APIKeyHeader(name="X-API-KEY", auto_error=False)
 async def get_api_key(api_key: str = Security(api_key_header)) -> None:
-    if api_key != BUILD_API_KEY:
+    if api_key != X_API_KEY:
         raise HTTPException(
             status_code=HTTP_403_FORBIDDEN, detail="Could not validate credentials"
         )
