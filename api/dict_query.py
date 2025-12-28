@@ -1,5 +1,4 @@
 import asyncio
-from typing import Any
 from urllib.parse import parse_qs, urlparse
 
 import httpx
@@ -118,7 +117,7 @@ async def get_dict(url_list: list[str], client: httpx.AsyncClient) -> list[WordR
 @router.post("/DictQuery/", tags=["DictionaryQuery"], response_model=Response)
 async def dict_query(
     request: Request, client: httpx.AsyncClient = Depends(get_http_client)
-) -> dict[str, Any]:
+) -> Response:
     """Query JMdict dictionary for the given word."""
 
     try:
@@ -128,15 +127,15 @@ async def dict_query(
                 status=404,
                 result=None,
                 error=ErrorInfo(code=404, message="No results found"),
-            ).model_dump()
+            )
 
         results = await get_dict(url_list, client)
-        return Response(status=200, result=results, error=None).model_dump()
+        return Response(status=200, result=results, error=None)
 
     except RuntimeError as e:
         return Response(
             status=500, result=None, error=ErrorInfo(code=500, message=str(e))
-        ).model_dump()
+        )
 
 
 # Test codes

@@ -149,7 +149,7 @@ def text_type(text: str) -> str | None:
 )
 async def get_headwords(
     request: HeadWordRequest, client: httpx.AsyncClient = Depends(get_http_client)
-) -> dict[str, Any]:
+) -> HeadWordResponse:
     """Get the lists of information of headwords with the given word."""
 
     match text_type(request.word):
@@ -189,13 +189,13 @@ async def get_headwords(
             status=504,
             result=None,
             error=ErrorInfo(code=504, message="Connection timed out"),
-        ).model_dump()
+        )
     except httpx.HTTPError as e:
         return HeadWordResponse(
             status=500,
             result=None,
             error=ErrorInfo(code=500, message=f"Request error: {e}"),
-        ).model_dump()
+        )
 
     if response.status_code == 200:
         try:
@@ -227,7 +227,7 @@ async def get_headwords(
                         )
                         # print(f"Found result: {search_result}")
                         result.append(search_result)
-                return HeadWordResponse(status=200, result=result).model_dump()
+                return HeadWordResponse(status=200, result=result)
             else:
                 # print("No results found")
                 return HeadWordResponse(
@@ -236,14 +236,14 @@ async def get_headwords(
                     error=ErrorInfo(
                         code=404, message="No results found for the given word"
                     ),
-                ).model_dump()
+                )
         except Exception as e:
             # print(f"Error parsing JSON: {e}")
             return HeadWordResponse(
                 status=500,
                 result=None,
                 error=ErrorInfo(code=500, message=f"Error parsing JSON: {e}"),
-            ).model_dump()
+            )
     else:
         # print(f"HTTP error {response.status_code}")
         return HeadWordResponse(
@@ -252,40 +252,40 @@ async def get_headwords(
             error=ErrorInfo(
                 code=response.status_code, message=f"HTTP error {response.status_code}"
             ),
-        ).model_dump()
+        )
 
 
 @router.post("/UsageQuery/URL/", tags=["UsageQuery"], response_model=URLResponse)
 async def get_urls(
     request: HeadWordRequest, client: httpx.AsyncClient = Depends(get_http_client)
-) -> dict[str, Any]:
+) -> URLResponse:
     """Get the URLs of words with the given word."""
     response = await get_headwords(request, client)
 
-    if response["status"] != 200:
+    if response.status != 200:
         return URLResponse(
-            status=response["status"],
+            status=response.status,
             result=None,
-            error=response["error"],
-        ).model_dump()
+            error=response.error,
+        )
 
     result = []
-    for res in response["result"]:
+    for res in response.result or []:
         result.append(
             URL(
-                word=res["headword"],
-                url=f"{SITE[request.site]}/headword/{res['headword_id']}/",
+                word=res.headword,
+                url=f"{SITE[request.site]}/headword/{res.headword_id}/",
             )
         )
     # print(f"Generated URLs: {result}")
 
-    return URLResponse(status=200, result=result).model_dump()
+    return URLResponse(status=200, result=result)
 
 
 @router.post("/UsageQuery/IdDetails/", tags=["UsageQuery"], response_model=IdResponse)
 async def get_id_details(
     request: IdRequest, client: httpx.AsyncClient = Depends(get_http_client)
-) -> dict[str, Any]:
+) -> IdResponse:
     """Get the details of the given headword ID."""
 
     async def fetch_data(
@@ -371,7 +371,7 @@ async def get_id_details(
     # IdResponse.base
     base = await fetch_data("get", "basicinfob")
     if isinstance(base, IdResponse):
-        return base.model_dump()
+        return base
     # IdResponse.subcorpus
     subcorpus = (
         []
@@ -379,11 +379,11 @@ async def get_id_details(
         else await fetch_data("get", "basicinfosc", "subcorpus")
     )
     if isinstance(subcorpus, IdResponse):
-        return subcorpus.model_dump()
+        return subcorpus
     # IdResponse.shojikei
     shojikei = await fetch_data("get", "basicinfosj", "shojikei")
     if isinstance(shojikei, IdResponse):
-        return shojikei.model_dump()
+        return shojikei
     # IdResponse.subcorpus_shojikei
     subcorpus_shojikei = (
         []
@@ -391,7 +391,7 @@ async def get_id_details(
         else await fetch_data("post", "basicinfoss", "subcorpus")
     )
     if isinstance(subcorpus_shojikei, IdResponse):
-        return subcorpus_shojikei.model_dump()
+        return subcorpus_shojikei
     # IdResponse.katuyokei
     katuyokei = (
         []
@@ -399,15 +399,15 @@ async def get_id_details(
         else await fetch_data("get", "basicinfoky", "katuyokei")
     )
     if isinstance(katuyokei, IdResponse):
-        return katuyokei.model_dump()
+        return katuyokei
     # IdResponse.setuzoku
     setuzoku = await fetch_data("get", "basicinfojs", "setuzoku")
     if isinstance(setuzoku, IdResponse):
-        return setuzoku.model_dump()
+        return setuzoku
     # IdResponse.patternfreqorder
     patternfreqorder = await fetch_data("post", "patternfreqorder", "rows")
     if isinstance(patternfreqorder, IdResponse):
-        return patternfreqorder.model_dump()
+        return patternfreqorder
 
     # print(patternfreqorder)
 
@@ -422,7 +422,7 @@ async def get_id_details(
             setuzoku=setuzoku,
             patternfreqorder=patternfreqorder,
         ),
-    ).model_dump()
+    )
 
 
 # Test code
