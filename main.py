@@ -72,7 +72,7 @@ app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)  # type: ignore
 app.add_middleware(SlowAPIMiddleware)
 
-# API Key Header for build API key authentication
+# API Key Header for API key authentication
 api_key_header = APIKeyHeader(name="X-API-KEY", auto_error=False)
 
 
