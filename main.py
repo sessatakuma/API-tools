@@ -10,6 +10,7 @@ An API interface that provide two functionalities
 import logging
 from contextlib import asynccontextmanager
 from typing import AsyncGenerator
+import secrets
 
 import httpx
 from fastapi import Depends, FastAPI, HTTPException, Security
@@ -76,7 +77,7 @@ api_key_header = APIKeyHeader(name="X-API-KEY", auto_error=False)
 
 
 async def get_api_key(api_key: str = Security(api_key_header)) -> None:
-    if api_key != X_API_KEY:
+    if not secrets.compare_digest(api_key or "", X_API_KEY):
         raise HTTPException(
             status_code=HTTP_403_FORBIDDEN, detail="Could not validate credentials"
         )
