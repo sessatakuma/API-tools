@@ -12,16 +12,18 @@ from contextlib import asynccontextmanager
 from typing import AsyncGenerator
 
 import httpx
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI, HTTPException, Security
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
+from fastapi.security.api_key import APIKeyHeader
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
 from slowapi.util import get_remote_address
+from starlette.status import HTTP_403_FORBIDDEN
 
 from api import accent_marker, dict_query, furigana_marker, sentence_query, usage_query
-from config.settings import ALLOW_ORIGINS, ALLOWED_HOSTS
+from config.settings import ALLOW_ORIGINS, ALLOWED_HOSTS, BUILD_API_KEY
 
 
 @asynccontextmanager
@@ -69,13 +71,40 @@ app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)  # type: ignore
 app.add_middleware(SlowAPIMiddleware)
 
-# Include routers from different modules
-app.include_router(accent_marker.router, prefix="/api")
-app.include_router(furigana_marker.router, prefix="/api")
-app.include_router(usage_query.router, prefix="/api")
-app.include_router(dict_query.router, prefix="/api")
-app.include_router(sentence_query.router, prefix="/api")
+# API Key Header for build API key authentication
+api_key_header = APIKeyHeader(name="X-API-KEY", auto_error=False)
+async def get_api_key(api_key: str = Security(api_key_header)) -> None:
+    if api_key != BUILD_API_KEY:
+        raise HTTPException(
+            status_code=HTTP_403_FORBIDDEN, detail="Could not validate credentials"
+        )
 
+# Include routers from different modules
+app.include_router(
+    accent_marker.router, 
+    prefix="/api", 
+    dependencies=[Depends(get_api_key)]
+)
+app.include_router(
+    furigana_marker.router, 
+    prefix="/api", 
+    dependencies=[Depends(get_api_key)]
+)
+app.include_router(
+    usage_query.router, 
+    prefix="/api", 
+    dependencies=[Depends(get_api_key)]
+)
+app.include_router(
+    dict_query.router, 
+    prefix="/api", 
+    dependencies=[Depends(get_api_key)]
+)
+app.include_router(
+    sentence_query.router, 
+    prefix="/api", 
+    dependencies=[Depends(get_api_key)]
+)
 logging.basicConfig(
     level=logging.INFO,
     format="{asctime} [{levelname:^8s}] {message} ({name}.{module}:{lineno})",
