@@ -14,8 +14,14 @@ from typing import AsyncGenerator
 import httpx
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.trustedhost import TrustedHostMiddleware
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
+from slowapi.middleware import SlowAPIMiddleware
+from slowapi.util import get_remote_address
 
 from api import accent_marker, dict_query, furigana_marker, sentence_query, usage_query
+from config.settings import ALLOW_ORIGINS, ALLOWED_HOSTS
 
 
 @asynccontextmanager
@@ -42,11 +48,26 @@ app = FastAPI(lifespan=lifespan)
 # Configure CORS middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=ALLOW_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Configure Trusted Host middleware
+app.add_middleware(
+    TrustedHostMiddleware,
+    allowed_hosts=ALLOWED_HOSTS,
+)
+
+# TODO: adjust rate limit as needed for each api endpoint
+limiter = Limiter(
+    key_func=get_remote_address,
+    default_limits=["60/minute"],
+)
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)  # type: ignore
+app.add_middleware(SlowAPIMiddleware)
 
 # Include routers from different modules
 app.include_router(accent_marker.router, prefix="/api")

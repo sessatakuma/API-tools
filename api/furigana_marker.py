@@ -7,12 +7,10 @@ from __future__ import annotations
 import os
 
 import httpx
-import yaml
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel, Field
 
 from api.dependencies import get_http_client
-
 from config.settings import YAHOO_API_KEY
 
 tags_metadata = [
@@ -70,7 +68,6 @@ class Response(BaseModel):
 router = APIRouter()
 
 url = "https://jlp.yahooapis.jp/FuriganaService/V2/furigana"
-
 
 
 @router.post("/MarkFurigana/", tags=["MarkFurigana"], response_model=Response)
