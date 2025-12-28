@@ -369,7 +369,7 @@ async def mark_accent(
                 ojad_idx_cnt = temp_ojad_idx  # Update global index
 
                 if furigana_result.subword:
-                    yahoo_subword = furigana_result.subword  # ignore
+                    yahoo_subword = furigana_result.subword
                     logger.debug(
                         "[Type Check] yahoo_subword element type: "
                         f"{type(yahoo_subword[0])}"
