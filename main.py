@@ -73,37 +73,30 @@ app.add_middleware(SlowAPIMiddleware)
 
 # API Key Header for build API key authentication
 api_key_header = APIKeyHeader(name="X-API-KEY", auto_error=False)
+
+
 async def get_api_key(api_key: str = Security(api_key_header)) -> None:
     if api_key != X_API_KEY:
         raise HTTPException(
             status_code=HTTP_403_FORBIDDEN, detail="Could not validate credentials"
         )
 
+
 # Include routers from different modules
 app.include_router(
-    accent_marker.router, 
-    prefix="/api", 
-    dependencies=[Depends(get_api_key)]
+    accent_marker.router, prefix="/api", dependencies=[Depends(get_api_key)]
 )
 app.include_router(
-    furigana_marker.router, 
-    prefix="/api", 
-    dependencies=[Depends(get_api_key)]
+    furigana_marker.router, prefix="/api", dependencies=[Depends(get_api_key)]
 )
 app.include_router(
-    usage_query.router, 
-    prefix="/api", 
-    dependencies=[Depends(get_api_key)]
+    usage_query.router, prefix="/api", dependencies=[Depends(get_api_key)]
 )
 app.include_router(
-    dict_query.router, 
-    prefix="/api", 
-    dependencies=[Depends(get_api_key)]
+    dict_query.router, prefix="/api", dependencies=[Depends(get_api_key)]
 )
 app.include_router(
-    sentence_query.router, 
-    prefix="/api", 
-    dependencies=[Depends(get_api_key)]
+    sentence_query.router, prefix="/api", dependencies=[Depends(get_api_key)]
 )
 logging.basicConfig(
     level=logging.INFO,
