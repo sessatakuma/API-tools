@@ -16,9 +16,8 @@ from pydantic import BaseModel, Field
 from api.dependencies import get_http_client
 from api.furigana_marker import (
     ErrorInfo,
-    MultiWordResultObject,
     Request,
-    SingleWordResultObject,
+    WordResult,
     mark_furigana,
 )
 
@@ -144,21 +143,16 @@ class AccentInfo(BaseModel):
     length: int = Field(description="Length of the furigana")
 
 
-class SingleWordAccentResultObject(BaseModel):
+class WordAccentResult(BaseModel):
     """Class representing a single word result object"""
 
     furigana: str = Field(description="Furigana of given kana and kanji")
     surface: str = Field(description="The (partial of) original query text")
     accent: list[AccentInfo] = Field(description="The accent of givent word")
-
-
-class MultiWordAccentResultObject(SingleWordAccentResultObject):
-    """Class representing a multiple word result object"""
-
-    subword: list[SingleWordResultObject] = Field(
+    subword: list[WordResult] = Field(
+        default_factory=list,
         description="""A list contains more details when a \
-        word contains both kanji and kana. Each elements in \
-        subword is a dict with furigana and surface."""
+        word contains both kanji and kana.""",
     )
 
 
@@ -168,8 +162,8 @@ class Response(BaseModel):
     status: int = Field(
         default=200, description="Status code of response align with RFC 9110"
     )
-    result: list[SingleWordAccentResultObject | MultiWordAccentResultObject] | None = (
-        Field(description="A list contains marked results")
+    result: list[WordAccentResult] | None = Field(
+        description="A list contains marked results"
     )
     error: ErrorInfo | None = Field(
         default=None,
@@ -292,7 +286,7 @@ async def mark_accent(
             )
 
             # If query sub-text contains non-kana and non-kanji words, ignore it
-            if not isinstance(furigana_result, MultiWordResultObject) and any(
+            if not furigana_result.subword and any(
                 not is_kana_or_kanji(chr) for chr in yahoo_furigana
             ):
                 logger.debug(" -> Skipped (Not Kana/Kanji)")
@@ -304,7 +298,7 @@ async def mark_accent(
                     )
                 )
                 final_response_results.append(
-                    SingleWordAccentResultObject(
+                    WordAccentResult(
                         furigana=yahoo_furigana, surface=yahoo_surface, accent=accents
                     )
                 )
@@ -374,32 +368,27 @@ async def mark_accent(
 
                 ojad_idx_cnt = temp_ojad_idx  # Update global index
 
-                if isinstance(furigana_result, MultiWordAccentResultObject):
+                if furigana_result.subword:
                     yahoo_subword = furigana_result.subword  # ignore
-                    if len(yahoo_subword) > 0:
-                        logger.debug(
-                            "[Type Check] yahoo_subword element type: "
-                            f"{type(yahoo_subword[0])}"
-                        )
-                        logger.debug(
-                            f"[Data Check] yahoo_subword content: {yahoo_subword}"
-                        )
+                    logger.debug(
+                        "[Type Check] yahoo_subword element type: "
+                        f"{type(yahoo_subword[0])}"
+                    )
+                    logger.debug(f"[Data Check] yahoo_subword content: {yahoo_subword}")
                     final_response_results.append(
-                        MultiWordAccentResultObject(
+                        WordAccentResult(
                             furigana=yahoo_furigana,
                             surface=yahoo_surface,
                             accent=accent_info_list,
                             subword=[
-                                SingleWordResultObject(
-                                    furigana=s.furigana, surface=s.surface
-                                )
+                                WordResult(furigana=s.furigana, surface=s.surface)
                                 for s in yahoo_subword
                             ],
                         )
                     )
                 else:
                     final_response_results.append(
-                        SingleWordAccentResultObject(
+                        WordAccentResult(
                             furigana=yahoo_furigana,
                             surface=yahoo_surface,
                             accent=accent_info_list,
