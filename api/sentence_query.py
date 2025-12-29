@@ -1,6 +1,5 @@
 import asyncio
 import re
-from typing import Any
 
 import httpx
 from bs4 import BeautifulSoup, Comment
@@ -45,7 +44,7 @@ router = APIRouter()
 async def sentence_query(
     request: Request,
     client: httpx.AsyncClient = Depends(get_http_client),
-) -> dict[str, Any]:
+) -> Response:
     """
     Example sentences from JMdict.
 
@@ -60,9 +59,7 @@ async def sentence_query(
         response = await client.post(url, data=payload)
         response.encoding = response.charset_encoding or "utf-8"
     except httpx.RequestError as e:
-        return Response(
-            status=500, result=None, error=f"Network error: {str(e)}"
-        ).model_dump()
+        return Response(status=500, result=None, error=f"Network error: {str(e)}")
 
     try:
         soup = BeautifulSoup(response.text, "html.parser")
@@ -87,20 +84,16 @@ async def sentence_query(
                     sentences.append(WordSentence(jp=jp.strip(), en=en.strip()))
 
         if not found_block or not sentences:
-            return Response(
-                status=404, result=None, error="No results found"
-            ).model_dump()
+            return Response(status=404, result=None, error="No results found")
 
         return Response(
             status=200,
             result=WordResult(word=request.word, id=request.id, sentence=sentences),
             error=None,
-        ).model_dump()
+        )
 
     except Exception as e:
-        return Response(
-            status=500, result=None, error=f"Parse error: {str(e)}"
-        ).model_dump()
+        return Response(status=500, result=None, error=f"Parse error: {str(e)}")
 
 
 # Test codes

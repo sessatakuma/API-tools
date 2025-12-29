@@ -2,6 +2,8 @@
 An API that mark furigana of given query text
 """
 
+from __future__ import annotations
+
 import os
 
 import httpx
@@ -34,20 +36,17 @@ class ErrorInfo(BaseModel):
     )
 
 
-class SingleWordResultObject(BaseModel):
-    """Class representing a single word result object"""
+class WordResult(BaseModel):
+    """Class representing a word result object"""
 
     furigana: str = Field(description="Furigana of given kana and kanji")
     surface: str = Field(description="The (partial of) original query text")
-
-
-class MultiWordResultObject(SingleWordResultObject):
-    """Class representing a multiple word result object"""
-
-    subword: list[SingleWordResultObject] = Field(
+    subword: list[WordResult] = Field(
+        default_factory=list,
         description="""A list contains more details when a \
         word contains both kanji and kana. Each elements in \
-        subword is a dict with furigana and surface."""
+        subword follow the same schema as this parent object \
+        (containing `furigana`, `surface`, and `subword`).""",
     )
 
 
@@ -57,7 +56,7 @@ class Response(BaseModel):
     status: int = Field(
         default=200, description="Status code of response align with RFC 9110"
     )
-    result: list[SingleWordResultObject | MultiWordResultObject] | None = Field(
+    result: list[WordResult] | None = Field(
         description="A list contains marked results"
     )
     error: ErrorInfo | None = Field(
@@ -135,16 +134,16 @@ async def mark_furigana(
         )
 
     words = result["result"]["word"]
-    parsed_result: list[SingleWordResultObject | MultiWordResultObject] = []
+    parsed_result: list[WordResult] = []
 
     for word in words:
         if "subword" in word:
             subword_list = [
-                SingleWordResultObject(furigana=sub["furigana"], surface=sub["surface"])
+                WordResult(furigana=sub["furigana"], surface=sub["surface"])
                 for sub in word["subword"]
             ]
             parsed_result.append(
-                MultiWordResultObject(
+                WordResult(
                     surface=word["surface"],
                     furigana=word["furigana"],
                     subword=subword_list,
@@ -152,7 +151,7 @@ async def mark_furigana(
             )
         else:
             parsed_result.append(
-                SingleWordResultObject(
+                WordResult(
                     surface=word["surface"],
                     furigana=word.get("furigana", word["surface"]),
                 )
