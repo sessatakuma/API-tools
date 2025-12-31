@@ -209,10 +209,13 @@ uv sync
 
 After build the environment, you should also obtain a Yahoo API Client ID from [Yahoo Japan website](https://developer.yahoo.co.jp/sitemap/).
 
-Then add the API key in file `secret.yaml` with the following format
+Then add the sensitive information in file `.env` as follows:
 
-```yaml
-Yahoo_API_key: <YOUR_YAHOO_API_CLIENT_ID>
+```env
+YAHOO_API_KEY=<Our Yahoo API Key>
+ALLOW_ORIGINS=<Our Allowed Origins>
+ALLOWED_HOSTS=<Our Allowed Hosts>
+X_API_KEY=<Our X-API-KEY>
 ```
 
 ## How to run?
