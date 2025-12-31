@@ -4,8 +4,6 @@ An API that mark furigana of given query text
 
 from __future__ import annotations
 
-import os
-
 import httpx
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel, Field
