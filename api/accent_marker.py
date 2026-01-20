@@ -287,11 +287,13 @@ async def mark_accent(
 
             # Identify if the word is numeric
             is_numeric = yahoo_surface.isdigit()
-            
+
             # ignore non-kana/kanji and non-numeric words
-            if not furigana_result.subword and any(
-                not is_kana_or_kanji(chr) for chr in yahoo_furigana
-            ) and not is_numeric:
+            if (
+                not furigana_result.subword
+                and any(not is_kana_or_kanji(chr) for chr in yahoo_furigana)
+                and not is_numeric
+            ):
                 logger.debug(" -> Skipped (Not Kana/Kanji)")
                 accents.append(
                     AccentInfo(
@@ -312,7 +314,7 @@ async def mark_accent(
 
             # Check OJAD boundary
             if ojad_idx >= len(ojad_results):
-                logger.warning(f" -> OJAD Index Out of Bounds ({ojad_idx})")                
+                logger.warning(f" -> OJAD Index Out of Bounds ({ojad_idx})")
             else:
                 logger.debug(
                     f"-> Comparing Yahoo '{yahoo_furigana_hira}'"
@@ -321,7 +323,9 @@ async def mark_accent(
 
             # Move non-numeric OJAD index to the matching position
             if not is_numeric:
-                while ojad_idx < len(ojad_results) and not yahoo_furigana_hira.startswith(
+                while ojad_idx < len(
+                    ojad_results
+                ) and not yahoo_furigana_hira.startswith(
                     jaconv.kata2hira(ojad_results[ojad_idx]["text"])
                 ):
                     ojad_idx += 1
@@ -333,19 +337,21 @@ async def mark_accent(
             # Define anchor(next Yahoo furigana) for numeric mode
             next_yahoo_furigana = None
             if i + 1 < len(furigana_results):
-                next_yahoo_furigana = jaconv.kata2hira(furigana_results[i+1].furigana)
+                next_yahoo_furigana = jaconv.kata2hira(furigana_results[i + 1].furigana)
 
             # Backup index
             temp_ojad_idx = ojad_idx
-            
+
             # Number mode: grab OJAD until the anchor
             if is_numeric:
                 while temp_ojad_idx < len(ojad_results):
                     ojad_text = jaconv.kata2hira(ojad_results[temp_ojad_idx]["text"])
 
-                    if next_yahoo_furigana and ojad_text.startswith(next_yahoo_furigana[:1]):
+                    if next_yahoo_furigana and ojad_text.startswith(
+                        next_yahoo_furigana[:1]
+                    ):
                         break
-                        
+
                     ojad_furigana += ojad_text
                     temp_accents.append(
                         AccentInfo(
@@ -375,15 +381,18 @@ async def mark_accent(
             is_match = False
             if is_numeric:
                 # Numeric mode: only check if OJAD has furigana grabbed
-                is_match = len(ojad_furigana) > 0 
-            else:                
+                is_match = len(ojad_furigana) > 0
+            else:
                 # Normal mode: check length and content
-                is_match = (len(ojad_furigana) == len(yahoo_furigana) and 
-                            jaconv.kata2hira(ojad_furigana) == jaconv.kata2hira(yahoo_furigana))
+                is_match = len(ojad_furigana) == len(
+                    yahoo_furigana
+                ) and jaconv.kata2hira(ojad_furigana) == jaconv.kata2hira(
+                    yahoo_furigana
+                )
 
             if is_match:
                 logger.debug(f" -> MATCHED! OJAD: {ojad_furigana}")
-                accents.extend(temp_accents) 
+                accents.extend(temp_accents)
 
                 # Build final accent info list
                 accent_info_list = []
