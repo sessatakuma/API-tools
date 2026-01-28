@@ -3,6 +3,7 @@ An API that mark accent of given query text
 """
 
 import logging
+import re
 import string
 from typing import Any
 
@@ -274,6 +275,9 @@ async def mark_accent(
 
         logger.debug(f"🔍 [Data Check] First item:{furigana_results[0]}")
 
+        #accept negative integers and decimals
+        numeric_pattern = re.compile(r"^-?\d+(\.\d+)?$") 
+
         for i, furigana_result in enumerate(furigana_results):
             yahoo_furigana = furigana_result.furigana
             yahoo_surface = furigana_result.surface
@@ -286,7 +290,7 @@ async def mark_accent(
             )
 
             # Identify if the word is numeric
-            is_numeric = yahoo_surface.isdigit()
+            is_numeric = bool(numeric_pattern.match(yahoo_surface))
 
             # ignore non-kana/kanji and non-numeric words
             if (
@@ -307,6 +311,12 @@ async def mark_accent(
                         furigana=yahoo_furigana, surface=yahoo_surface, accent=accents
                     )
                 )
+
+                # Move OJAD index if skipped punctuation
+                if ojad_idx_cnt < len(ojad_results) and jaconv.kata2hira(
+                    ojad_results[ojad_idx_cnt]["text"].strip()
+                ) in ["、", "。", ",", "."]:
+                    ojad_idx_cnt += 1
                 continue
 
             # Synchronize OJAD index
@@ -345,11 +355,21 @@ async def mark_accent(
             # Number mode: grab OJAD until the anchor
             if is_numeric:
                 while temp_ojad_idx < len(ojad_results):
-                    ojad_text = jaconv.kata2hira(ojad_results[temp_ojad_idx]["text"])
+                    raw_text = ojad_results[temp_ojad_idx]["text"].strip()
+                    ojad_text = jaconv.kata2hira(raw_text)
 
-                    if next_yahoo_furigana and ojad_text.startswith(
-                        next_yahoo_furigana[:1]
+                    # Stop if reached the anchor
+                    if (
+                        next_yahoo_furigana 
+                        and next_yahoo_furigana.startswith(ojad_text)
                     ):
+                        break
+                    
+                    # Stop if consumed too much data
+                    if len(ojad_furigana) > max(len(yahoo_surface) * 4, 12):
+                        logger.warning(
+                            f" -> Numeric consumption exceeded limit '{yahoo_surface}'."
+                        )
                         break
 
                     ojad_furigana += ojad_text
@@ -442,6 +462,26 @@ async def mark_accent(
                     "-> MATCH FAILED."
                     f"Yahoo: {yahoo_furigana} vs OJAD Assembly: {ojad_furigana}"
                 )
+
+                # Fallback to Yahoo furigana with no accent info
+                accent_info = AccentInfo(
+                    furigana=yahoo_furigana, 
+                    accent_marking_type=0, 
+                    length=len(yahoo_furigana)
+                )
+
+                final_response_results.append(
+                    WordAccentResult(
+                        furigana=yahoo_furigana,
+                        surface=yahoo_surface,
+                        accent=[accent_info],
+                    )
+                )
+
+                # Move OJAD index to next item to avoid infinite loop
+                if ojad_idx_cnt < len(ojad_results):
+                    ojad_idx_cnt += 1
+
         return Response(status=200, result=final_response_results)
 
     except Exception as e:
