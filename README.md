@@ -209,14 +209,23 @@ uv sync
 
 After build the environment, you should also obtain a Yahoo API Client ID from [Yahoo Japan website](https://developer.yahoo.co.jp/sitemap/).
 
-Then add the sensitive information in file `.env` as follows:
+For standalone Docker deployment, copy `.env.example` to `.env` in this directory and fill in the values:
 
 ```env
 YAHOO_API_KEY=<Our Yahoo API Key>
-ALLOW_ORIGINS=<Our Allowed Origins>
-ALLOWED_HOSTS=<Our Allowed Hosts>
-X_API_KEY=<Our X-API-KEY>
+API_TOOLS_KEY=<Our X-API-KEY>
+API_TOOLS_PORT=8000
+API_TOOLS_ALLOW_ORIGINS=<Our Allowed Origins>
+API_TOOLS_ALLOWED_HOSTS=<Our Allowed Hosts>
 ```
+
+Then run:
+
+```bash
+docker compose --env-file .env up -d --build
+```
+
+For local non-Docker development, keep using `uv sync` and provide the runtime variables expected by the app (`YAHOO_API_KEY`, `ALLOW_ORIGINS`, `ALLOWED_HOSTS`, `X_API_KEY`) through your local environment or a compatible `.env` workflow.
 
 ## How to run?
 
