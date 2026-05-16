@@ -2,8 +2,8 @@ FROM python:3.11-slim AS builder
 
 WORKDIR /app
 
-# Install uv for fast dependency management
-RUN pip install --no-cache-dir uv
+# Install uv for fast dependency management (pinned for reproducible builds)
+RUN pip install --no-cache-dir "uv==0.9.0"
 
 # Copy dependency files first for better layer caching
 COPY pyproject.toml uv.lock ./
@@ -13,13 +13,9 @@ RUN uv sync --frozen --no-dev --no-install-project
 
 COPY . .
 
-RUN python -m compileall -b /app \
-    && python - <<'PY'
-from pathlib import Path
-
-for path in Path("/app").rglob("*.py"):
-    path.unlink()
-PY
+# Compile only our app code (skip .venv) and drop the .py sources
+RUN python -m compileall -b -q main.py api config \
+    && find main.py api config -name "*.py" -delete
 
 FROM python:3.11-slim
 

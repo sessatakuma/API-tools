@@ -218,25 +218,20 @@ ALLOW_ORIGINS=<Our Allowed Origins>
 ALLOWED_HOSTS=<Our Allowed Hosts>
 ```
 
-Then run:
-
-```bash
-uv run uvicorn main:app --host 127.0.0.1 --port 8000
-```
-
 In [jpcorrect-backend](https://github.com/sessatakuma/jpcorrect-backend), the equivalent workflow is `make api-tools`.
-
-If you prefer to run `API-tools` through Docker from this subdirectory, you can also use:
-
-```bash
-cp .env.example .env
-docker compose up -d --build
-```
 
 ## How to run?
 
+Run the service with `uv` (dev mode, with auto-reload):
+
 ```bash
-uvicorn main:app --reload
+uv run uvicorn main:app --host 127.0.0.1 --port 8000 --reload
+```
+
+Or run it through Docker from this subdirectory:
+
+```bash
+docker compose up -d --build
 ```
 
 To check the functionality, you may send POST request with curl as follows.

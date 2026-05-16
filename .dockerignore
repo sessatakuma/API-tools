@@ -8,6 +8,9 @@ __pycache__/
 .mypy_cache/
 .ruff_cache/
 .venv/
+.env
+.env.*
+!.env.example
 README.md
 Procfile
 render.yaml
