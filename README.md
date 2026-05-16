@@ -209,23 +209,29 @@ uv sync
 
 After build the environment, you should also obtain a Yahoo API Client ID from [Yahoo Japan website](https://developer.yahoo.co.jp/sitemap/).
 
-For standalone Docker deployment, copy `.env.example` to `.env` in this directory and fill in the values:
+For local standalone development, copy `.env.example` to `.env` in this directory and fill in the values:
 
 ```env
 YAHOO_API_KEY=<Our Yahoo API Key>
-API_TOOLS_KEY=<Our X-API-KEY>
-API_TOOLS_PORT=8000
-API_TOOLS_ALLOW_ORIGINS=<Our Allowed Origins>
-API_TOOLS_ALLOWED_HOSTS=<Our Allowed Hosts>
+X_API_KEY=<Our X-API-KEY>
+ALLOW_ORIGINS=<Our Allowed Origins>
+ALLOWED_HOSTS=<Our Allowed Hosts>
 ```
 
 Then run:
 
 ```bash
-docker compose --env-file .env up -d --build
+uv run uvicorn main:app --host 127.0.0.1 --port 8000
 ```
 
-For local non-Docker development, keep using `uv sync` and provide the runtime variables expected by the app (`YAHOO_API_KEY`, `ALLOW_ORIGINS`, `ALLOWED_HOSTS`, `X_API_KEY`) through your local environment or a compatible `.env` workflow.
+In [jpcorrect-backend](https://github.com/sessatakuma/jpcorrect-backend), the equivalent workflow is `make api-tools`.
+
+If you prefer to run `API-tools` through Docker from this subdirectory, you can also use:
+
+```bash
+cp .env.example .env
+docker compose up -d --build
+```
 
 ## How to run?
 

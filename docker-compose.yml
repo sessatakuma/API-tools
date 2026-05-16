@@ -5,11 +5,8 @@ services:
             context: .
             dockerfile: Dockerfile
         container_name: jpcorrect-api-tools
-        environment:
-            YAHOO_API_KEY: ${YAHOO_API_KEY}
-            X_API_KEY: ${API_TOOLS_KEY}
-            ALLOW_ORIGINS: ${API_TOOLS_ALLOW_ORIGINS:-*}
-            ALLOWED_HOSTS: ${API_TOOLS_ALLOWED_HOSTS:-*}
+        env_file:
+            - .env
         ports:
             - "127.0.0.1:${API_TOOLS_PORT:-8000}:8000"
         restart: unless-stopped
