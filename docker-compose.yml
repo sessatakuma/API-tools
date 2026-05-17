@@ -9,4 +9,10 @@ services:
             - .env
         ports:
             - "127.0.0.1:${API_TOOLS_PORT:-8000}:8000"
+        networks:
+            - jpcorrect-shared
         restart: unless-stopped
+
+networks:
+    jpcorrect-shared:
+        external: true
