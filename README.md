@@ -212,11 +212,11 @@ After build the environment, you should also obtain a Yahoo API Client ID from [
 For local standalone development, copy `.env.example` to `.env` in this directory and fill in the values:
 
 ```env
-YAHOO_API_KEY=<Our Yahoo API Key>
-X_API_KEY=<Our X-API-KEY>
-ALLOW_ORIGINS=<Our Allowed Origins>
-ALLOWED_HOSTS=<Our Allowed Hosts>
+YAHOO_API_KEY=<Our Yahoo API Key>   # required — app asserts on startup
+API_TOOLS_PORT=8000                 # optional — host-side port for docker compose (default 8000)
 ```
+
+Authentication (`X-API-KEY`), CORS, and trusted-host middleware were intentionally removed; this service is expected to run behind the parent backend or on a private network.
 
 In [jpcorrect-backend](https://github.com/sessatakuma/jpcorrect-backend), the equivalent workflow is `make api-tools`.
 
