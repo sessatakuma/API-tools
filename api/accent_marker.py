@@ -18,9 +18,8 @@ from api.dependencies import get_http_client
 from api.furigana_marker import (
     ErrorInfo,
     Request,
-    Response as FuriganaResponse,
     WordResult,
-    _fetch_yahoo_raw,
+    mark_furigana,
 )
 from config.furigana_overrides import apply_accent_overrides
 
@@ -466,18 +465,22 @@ async def mark_accent(
     try:
         query_text = neologdn.normalize(request.text, tilde="normalize")
 
-        # Use the raw Yahoo tokens (no overrides) so OJAD alignment sees what
-        # OJAD actually parsed; overrides are applied after alignment instead.
-        raw_yahoo = await _fetch_yahoo_raw(query_text, client)
-        if isinstance(raw_yahoo, FuriganaResponse):
-            logger.warning(f"Yahoo Response Empty or Invalid: {raw_yahoo}")
+        # Apply furigana overrides BEFORE alignment: many of the overrides
+        # (e.g. "4日"→"よっか", "27日"→"にじゅうしちにち") merge a numeric
+        # surface with the counter into one token whose furigana matches what
+        # OJAD reads as a single phrase. align_accent's numeric-anchor logic
+        # otherwise cascades-fails on these inputs because numeric tokens lack
+        # any Yahoo furigana for OJAD to align against.
+        furigana_response = await mark_furigana(Request(text=query_text), client)
+        if furigana_response.status != 200 or not furigana_response.result:
+            logger.warning(f"Yahoo Response Empty or Invalid: {furigana_response}")
             return Response(
-                status=raw_yahoo.status,
+                status=furigana_response.status,
                 result=None,
-                error=raw_yahoo.error,
+                error=furigana_response.error,
             )
 
-        furigana_results = raw_yahoo
+        furigana_results = furigana_response.result
         logger.debug(f"Yahoo Results Count: {len(furigana_results)}")
 
         ojad_surface, ojad_results = await get_ojad_result(query_text, client)
