@@ -2,16 +2,19 @@
 An API that mark accent of given query text
 """
 
+import asyncio
+import json
 import logging
 import re
 import string
-from typing import Any
+from typing import Any, AsyncIterator
 
 import httpx
 import jaconv
 import neologdn
 from bs4 import BeautifulSoup
 from fastapi import APIRouter, Depends
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from api.dependencies import get_http_client
@@ -515,14 +518,16 @@ async def align_accent(
     ]
 
 
-@router.post("/MarkAccent/", tags=["MarkAccent"], response_model=Response)
-async def mark_accent(
-    request: Request, client: httpx.AsyncClient = Depends(get_http_client)
+async def _process_accent_chunk(
+    text: str, client: httpx.AsyncClient
 ) -> Response:
-    """Receive POST request, return a Response object"""
-    logger.info(f"[API] Received Request Text: {request.text}")
+    """Run the full accent pipeline on a single chunk of text.
+
+    Shared by `/api/MarkAccent/` (whole input as one chunk) and
+    `/api/MarkAccent/stream/` (one call per `\\n`-split paragraph).
+    """
     try:
-        query_text = neologdn.normalize(request.text, tilde="normalize")
+        query_text = neologdn.normalize(text, tilde="normalize")
 
         # Apply furigana overrides BEFORE alignment: many of the overrides
         # (e.g. "4日"→"よっか", "27日"→"にじゅうしちにち") merge a numeric
@@ -542,7 +547,7 @@ async def mark_accent(
         furigana_results = furigana_response.result
         logger.debug(f"Yahoo Results Count: {len(furigana_results)}")
 
-        ojad_surface, ojad_results = await get_ojad_result(query_text, client)
+        _ojad_surface, ojad_results = await get_ojad_result(query_text, client)
 
         final_results = await align_accent(furigana_results, ojad_results)
         final_results = apply_accent_overrides(final_results)
@@ -550,9 +555,61 @@ async def mark_accent(
         return Response(status=200, result=final_results)
 
     except Exception as e:
-        logger.exception(f"Unexpected error occurred: {request.text}")
+        logger.exception(f"Unexpected error occurred: {text}")
         return Response(
             status=500,
             result=None,
             error=ErrorInfo(code=500, message=f"Error: {e}"),
         )
+
+
+@router.post("/MarkAccent/", tags=["MarkAccent"], response_model=Response)
+async def mark_accent(
+    request: Request, client: httpx.AsyncClient = Depends(get_http_client)
+) -> Response:
+    """Receive POST request, return a Response object."""
+    logger.info(f"[API] Received Request Text: {request.text}")
+    return await _process_accent_chunk(request.text, client)
+
+
+@router.post("/MarkAccent/stream/", tags=["MarkAccent"])
+async def mark_accent_stream(
+    request: Request,
+    client: httpx.AsyncClient = Depends(get_http_client),
+) -> StreamingResponse:
+    """Split the input on '\\n', process each non-empty paragraph in parallel,
+    and stream one NDJSON line per chunk as soon as its preceding chunks are
+    done. The original line index is preserved as `chunk`, so consumers can
+    tell that a blank line at e.g. position 2 was skipped.
+    """
+    logger.info(f"[API] Received streaming request: {request.text!r}")
+
+    raw_lines = request.text.split("\n")
+    chunks: list[tuple[int, str]] = [
+        (idx, line) for idx, line in enumerate(raw_lines) if line.strip()
+    ]
+
+    async def generate() -> AsyncIterator[bytes]:
+        if not chunks:
+            return
+        # Fire every chunk's Yahoo + OJAD round-trips in parallel.
+        tasks = [
+            asyncio.create_task(_process_accent_chunk(line, client))
+            for _, line in chunks
+        ]
+        # Yield in input order so the client renders chunks monotonically.
+        for (chunk_idx, _line), task in zip(chunks, tasks):
+            try:
+                resp = await task
+                payload: dict[str, Any] = {"chunk": chunk_idx, **resp.model_dump()}
+            except Exception as exc:
+                logger.exception(f"Streaming chunk {chunk_idx} failed")
+                payload = {
+                    "chunk": chunk_idx,
+                    "status": 500,
+                    "result": None,
+                    "error": {"code": 500, "message": f"Error: {exc}"},
+                }
+            yield (json.dumps(payload, ensure_ascii=False) + "\n").encode("utf-8")
+
+    return StreamingResponse(generate(), media_type="application/x-ndjson")
