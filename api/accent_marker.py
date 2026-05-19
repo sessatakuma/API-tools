@@ -271,222 +271,248 @@ def _norm(s: str) -> str:
     return "".join(_VOICING_FOLD.get(c, c) for c in hira)
 
 
+# --- DP aligner ----------------------------------------------------------------
+#
+# The greedy aligner this replaced had two fatal failure modes: a numeric
+# anchor that over-consumed when Yahoo and OJAD disagreed on a phrase
+# boundary, and a fallback path that advanced OJAD by exactly +1 — so a
+# single mismatch cascaded into type-0 fallback for every downstream token.
+#
+# Instead we now build a Needleman-Wunsch-style DP over (yahoo_token,
+# ojad_entry) pairs. Each cell dp[i][j] holds the minimum total cost to
+# explain Yahoo tokens [0..i) using OJAD entries [0..j). For every (i, j)
+# we try consuming k OJAD entries for token i with k ∈ [0, K_MAX]; the
+# per-token cost depends on token shape (punctuation / numeric / kana) and
+# uses edit distance over rendaku-folded strings for kana tokens. A bad
+# token costs O(1); downstream tokens stay aligned.
+
+_K_MAX = 16  # max OJAD entries one Yahoo token can consume
+_INF = float("inf")
+_FALLBACK_COST = 3.0  # cost of giving up on a single token (k=0 for kana/numeric)
+_OJAD_PUNCT_TEXTS = {"、", "。", ",", ".", "?", "!", "！", "？"}
+
+
+def _edit_distance(a: str, b: str) -> int:
+    """Levenshtein distance. Used over rendaku-folded strings only."""
+    if a == b:
+        return 0
+    if not a:
+        return len(b)
+    if not b:
+        return len(a)
+    prev = list(range(len(b) + 1))
+    for i, ca in enumerate(a, 1):
+        curr = [i] + [0] * len(b)
+        for j, cb in enumerate(b, 1):
+            curr[j] = (
+                prev[j - 1]
+                if ca == cb
+                else 1 + min(prev[j - 1], prev[j], curr[j - 1])
+            )
+        prev = curr
+    return prev[-1]
+
+
+def _is_punct_token(furigana: str, is_numeric: bool) -> bool:
+    if is_numeric or not furigana:
+        return False
+    return all(not is_kana_or_kanji(c) for c in furigana)
+
+
+def _match_cost(
+    token: Any, span_texts: list[str], is_numeric: bool, is_punct: bool
+) -> float:
+    """Cost of letting `token` consume the given OJAD-text span."""
+    k = len(span_texts)
+    concat = "".join(span_texts)
+
+    if is_punct:
+        if k == 0:
+            return 0.0
+        if k == 1:
+            stripped = span_texts[0].strip()
+            yahoo_stripped = token.furigana.strip()
+            # Free-consume only if the OJAD entry actually matches this
+            # token's punct (or is empty). Without this, two adjacent
+            # punct tokens (e.g. "。" then "\n") could both consume the
+            # single OJAD "。" at zero cost and DP would arbitrarily give
+            # it to the wrong one.
+            if not stripped:
+                return 0.0
+            if stripped == yahoo_stripped:
+                return 0.0
+        return _INF
+
+    if is_numeric:
+        if k == 0:
+            return _FALLBACK_COST
+        # Numerics have no Yahoo furigana to compare against. Accept any
+        # reasonable count of morae; only penalise blatantly over-long spans.
+        upper = max(4, len(token.surface) * 4)
+        return 0.0 if k <= upper else float(k - upper)
+
+    # Kana / kanji token: compare under rendaku fold.
+    if k == 0:
+        return _FALLBACK_COST
+    y_norm = _norm(token.furigana)
+    o_norm = _norm(concat)
+    # Cheap length pre-filter — keeps the DP fast and prevents pathological
+    # "consume 12 OJAD entries to match a 2-mora Yahoo token" alignments.
+    if abs(len(y_norm) - len(o_norm)) > 3:
+        return _INF
+    return float(_edit_distance(y_norm, o_norm))
+
+
+def _build_word_result(token: Any, ojad_span: list[dict[str, Any]]) -> WordAccentResult:
+    """Wrap an aligned (token, OJAD-span) pair into a WordAccentResult."""
+    yahoo_surface = token.surface
+    yahoo_furigana = token.furigana
+    is_numeric = bool(numeric_pattern.match(yahoo_surface))
+    subword = (
+        [WordResult(furigana=s.furigana, surface=s.surface) for s in token.subword]
+        if token.subword
+        else []
+    )
+
+    if not ojad_span:
+        # k=0 path: emit type-0 fallback so the downstream override pass and
+        # callers still see one AccentInfo per token.
+        return WordAccentResult(
+            surface=yahoo_surface,
+            furigana=yahoo_furigana,
+            accent=[
+                AccentInfo(
+                    furigana=yahoo_furigana,
+                    accent_marking_type=0,
+                    length=len(yahoo_furigana),
+                )
+            ],
+            subword=subword,
+        )
+
+    # Drop OJAD entries with empty text (phrase-boundary sentinels). They
+    # carry no audible mora and would surface as a stray "(…||0)" row.
+    voiced_span = [e for e in ojad_span if e["text"]]
+    if not voiced_span:
+        return WordAccentResult(
+            surface=yahoo_surface,
+            furigana=yahoo_furigana,
+            accent=[
+                AccentInfo(
+                    furigana=yahoo_furigana,
+                    accent_marking_type=0,
+                    length=len(yahoo_furigana),
+                )
+            ],
+            subword=subword,
+        )
+    accents = [
+        AccentInfo(
+            furigana=e["text"],
+            accent_marking_type=e["accent"],
+            length=len(e["text"]),
+        )
+        for e in voiced_span
+    ]
+    # Numerics had no Yahoo furigana to begin with — surface the OJAD reading.
+    display = (
+        "".join(e["text"] for e in voiced_span) if is_numeric else yahoo_furigana
+    )
+    return WordAccentResult(
+        surface=yahoo_surface,
+        furigana=display,
+        accent=accents,
+        subword=subword,
+    )
+
+
+def _fallback_word(token: Any) -> WordAccentResult:
+    return _build_word_result(token, [])
+
+
 async def align_accent(
     furigana_results: list[Any], ojad_results: list[dict[str, Any]]
 ) -> list[WordAccentResult]:
-    """Align yahoo furigana with OJAD results, return final accent marked result"""
-    final_response_results = []
-    ojad_idx_cnt = 0
+    """Align yahoo furigana with OJAD per-moji entries via global DP.
 
-    logger.debug(f"🔍 [Data Check] First item:{furigana_results[0]}")
+    Returns one WordAccentResult per Yahoo token. Each token consumes a
+    (possibly empty) contiguous span of OJAD entries; the assignment that
+    minimises total mismatch cost wins.
+    """
+    n = len(furigana_results)
+    m = len(ojad_results)
 
-    for i, furigana_result in enumerate(furigana_results):
-        yahoo_furigana = furigana_result.furigana
-        yahoo_surface = furigana_result.surface
+    if n == 0:
+        return []
+    if m == 0:
+        return [_fallback_word(t) for t in furigana_results]
 
-        yahoo_furigana_hira = jaconv.kata2hira(yahoo_furigana)
-        yahoo_furigana_norm = _norm(yahoo_furigana)
-        accents: list[AccentInfo] = []
+    # Pre-compute per-token classification and OJAD texts.
+    token_kinds: list[tuple[bool, bool]] = []
+    for t in furigana_results:
+        is_num = bool(numeric_pattern.match(t.surface))
+        is_pct = _is_punct_token(t.furigana, is_num)
+        token_kinds.append((is_num, is_pct))
+    ojad_texts = [e["text"] for e in ojad_results]
 
-        logger.debug(f"Processing Yahoo Word [{i}]: {yahoo_surface} ({yahoo_furigana})")
+    # dp[i][j] = best cost aligning tokens [0..i) to ojad entries [0..j).
+    dp: list[list[float]] = [[_INF] * (m + 1) for _ in range(n + 1)]
+    back: list[list[int]] = [[-1] * (m + 1) for _ in range(n + 1)]
+    dp[0][0] = 0.0
 
-        # Identify if the word is numeric
-        is_numeric = bool(numeric_pattern.match(yahoo_surface))
+    for i in range(n):
+        token = furigana_results[i]
+        is_num, is_pct = token_kinds[i]
+        for j in range(m + 1):
+            base = dp[i][j]
+            if base == _INF:
+                continue
+            k_limit = min(_K_MAX, m - j)
+            for k in range(0, k_limit + 1):
+                cost = _match_cost(token, ojad_texts[j : j + k], is_num, is_pct)
+                if cost == _INF:
+                    continue
+                new_cost = base + cost
+                if new_cost < dp[i + 1][j + k]:
+                    dp[i + 1][j + k] = new_cost
+                    back[i + 1][j + k] = j
 
-        # Skip tokens whose furigana is entirely non-kana/kanji (pure
-        # punctuation, latin letters, etc.). `is_kana_or_kanji` also rejects
-        # the long-vowel marker ー by design, so checking `any(not …)` would
-        # bail on real katakana words like "データ" / "サッカー" — use `all`
-        # to require every char to be non-kana before skipping.
-        if (
-            not furigana_result.subword
-            and all(not is_kana_or_kanji(chr) for chr in yahoo_furigana)
-            and not is_numeric
-        ):
-            logger.debug(" -> Skipped (Not Kana/Kanji)")
-            accents.append(
-                AccentInfo(
-                    furigana=yahoo_surface,
-                    accent_marking_type=0,
-                    length=len(yahoo_surface),
-                )
-            )
-            final_response_results.append(
-                WordAccentResult(
-                    furigana=yahoo_furigana, surface=yahoo_surface, accent=accents
-                )
-            )
+    # Pick the best terminal state. Prefer fully consuming OJAD; otherwise
+    # take the cheapest end (trailing empty entries get inherited for free
+    # by the previous token's span since their text contributes nothing to
+    # edit distance).
+    best_j = m
+    best_cost = dp[n][m]
+    if best_cost == _INF:
+        for j in range(m + 1):
+            if dp[n][j] < best_cost:
+                best_cost = dp[n][j]
+                best_j = j
 
-            # Move OJAD index if skipped punctuation
-            if ojad_idx_cnt < len(ojad_results) and jaconv.kata2hira(
-                ojad_results[ojad_idx_cnt]["text"].strip()
-            ) in ["、", "。", ",", "."]:
-                ojad_idx_cnt += 1
-            continue
+    if best_cost == _INF:
+        logger.error(
+            "DP alignment found no valid path (n=%d, m=%d); falling back per token.",
+            n,
+            m,
+        )
+        return [_fallback_word(t) for t in furigana_results]
 
-        # Synchronize OJAD index
-        ojad_idx = ojad_idx_cnt
+    # Backtrack to recover the OJAD span each token consumed.
+    spans: list[tuple[int, int]] = [(0, 0)] * n
+    cur_j = best_j
+    for i in range(n, 0, -1):
+        prev_j = back[i][cur_j]
+        if prev_j < 0:
+            logger.error("DP backtrace broken at i=%d, j=%d", i, cur_j)
+            return [_fallback_word(t) for t in furigana_results]
+        spans[i - 1] = (prev_j, cur_j)
+        cur_j = prev_j
 
-        # Check OJAD boundary
-        if ojad_idx >= len(ojad_results):
-            logger.warning(f" -> OJAD Index Out of Bounds ({ojad_idx})")
-        else:
-            logger.debug(
-                f"-> Comparing Yahoo '{yahoo_furigana_hira}'"
-                f" vs OJAD '{ojad_results[ojad_idx]['text']}'"
-            )
-
-        # Move non-numeric OJAD index to the matching position
-        if not is_numeric:
-            while ojad_idx < len(ojad_results) and not yahoo_furigana_norm.startswith(
-                _norm(ojad_results[ojad_idx]["text"])
-            ):
-                ojad_idx += 1
-
-        # catch the furigana from Yahoo with OJAD results
-        ojad_furigana = ""
-        temp_accents = []  # Use temp list to avoid partial data
-
-        # Define anchor(next Yahoo furigana) for numeric mode (rendaku-folded so
-        # e.g. Yahoo's "ふんかん" still matches OJAD's actual reading "ぷんかん").
-        next_yahoo_furigana = None
-        if i + 1 < len(furigana_results):
-            next_yahoo_furigana = _norm(furigana_results[i + 1].furigana)
-
-        # Backup index
-        temp_ojad_idx = ojad_idx
-
-        # Number mode: grab OJAD until the anchor
-        if is_numeric:
-            while temp_ojad_idx < len(ojad_results):
-                raw_text = ojad_results[temp_ojad_idx]["text"].strip()
-                ojad_text = jaconv.kata2hira(raw_text)
-                ojad_text_norm = _norm(raw_text)
-
-                # Stop if reached the anchor (rendaku-tolerant comparison).
-                if (
-                    next_yahoo_furigana
-                    and ojad_text_norm
-                    and next_yahoo_furigana.startswith(ojad_text_norm)
-                ):
-                    break
-
-                # Stop if consumed too much data
-                if len(ojad_furigana) > max(len(yahoo_surface) * 4, 12):
-                    logger.warning(
-                        f" -> Numeric consumption exceeded limit '{yahoo_surface}'."
-                    )
-                    break
-
-                ojad_furigana += ojad_text
-                temp_accents.append(
-                    AccentInfo(
-                        furigana=ojad_text,
-                        accent_marking_type=ojad_results[temp_ojad_idx]["accent"],
-                        length=len(ojad_text),
-                    )
-                )
-                temp_ojad_idx += 1
-        # Normal mode: grab OJAD until length match
-        else:
-            while len(ojad_furigana) < len(yahoo_furigana) and temp_ojad_idx < len(
-                ojad_results
-            ):
-                ojad_text = ojad_results[temp_ojad_idx]["text"]
-                ojad_furigana += ojad_text
-                temp_accents.append(
-                    AccentInfo(
-                        furigana=ojad_text,
-                        accent_marking_type=ojad_results[temp_ojad_idx]["accent"],
-                        length=len(ojad_text),
-                    )
-                )
-                temp_ojad_idx += 1
-
-        # Final matching check
-        is_match = False
-        if is_numeric:
-            # Numeric mode: only check if OJAD has furigana grabbed
-            is_match = len(ojad_furigana) > 0
-        else:
-            # Normal mode: check length and content (rendaku-tolerant).
-            is_match = (
-                len(ojad_furigana) == len(yahoo_furigana)
-                and _norm(ojad_furigana) == _norm(yahoo_furigana)
-            )
-
-        if is_match:
-            logger.debug(f" -> MATCHED! OJAD: {ojad_furigana}")
-            accents.extend(temp_accents)
-
-            # Build final accent info list
-            accent_info_list = []
-            for idx, accent in enumerate(accents):
-                accent_info_list.append(
-                    AccentInfo(
-                        furigana=accent.furigana,
-                        accent_marking_type=accent.accent_marking_type,
-                        length=accent.length,
-                    )
-                )
-
-            ojad_idx_cnt = temp_ojad_idx  # Update global index
-
-            display_furigana = ojad_furigana if is_numeric else yahoo_furigana
-
-            # Build final response
-            if furigana_result.subword:
-                yahoo_subword = furigana_result.subword
-                logger.debug(
-                    f"[Type Check] yahoo_subword element type: {type(yahoo_subword[0])}"
-                )
-                logger.debug(f"[Data Check] yahoo_subword content: {yahoo_subword}")
-                final_response_results.append(
-                    WordAccentResult(
-                        furigana=display_furigana,
-                        surface=yahoo_surface,
-                        accent=accent_info_list,
-                        subword=[
-                            WordResult(furigana=s.furigana, surface=s.surface)
-                            for s in yahoo_subword
-                        ],
-                    )
-                )
-            else:
-                final_response_results.append(
-                    WordAccentResult(
-                        furigana=display_furigana,
-                        surface=yahoo_surface,
-                        accent=accent_info_list,
-                    )
-                )
-        else:
-            # [ERROR BLOCK]
-            logger.error(
-                "-> MATCH FAILED."
-                f"Yahoo: {yahoo_furigana} vs OJAD Assembly: {ojad_furigana}"
-            )
-
-            # Fallback to Yahoo furigana with no accent info
-            accent_info = AccentInfo(
-                furigana=yahoo_furigana,
-                accent_marking_type=0,
-                length=len(yahoo_furigana),
-            )
-
-            final_response_results.append(
-                WordAccentResult(
-                    furigana=yahoo_furigana,
-                    surface=yahoo_surface,
-                    accent=[accent_info],
-                )
-            )
-
-            # Move OJAD index to next item to avoid infinite loop
-            if ojad_idx_cnt < len(ojad_results):
-                ojad_idx_cnt += 1
-
-    return final_response_results
+    logger.debug("DP alignment cost=%.2f spans=%s", best_cost, spans)
+    return [
+        _build_word_result(furigana_results[i], ojad_results[s:e])
+        for i, (s, e) in enumerate(spans)
+    ]
 
 
 @router.post("/MarkAccent/", tags=["MarkAccent"], response_model=Response)
