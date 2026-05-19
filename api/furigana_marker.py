@@ -9,6 +9,7 @@ from fastapi import APIRouter, Depends
 from pydantic import BaseModel, Field
 
 from api.dependencies import get_http_client
+from config.furigana_overrides import apply_furigana_overrides
 from config.settings import YAHOO_API_KEY
 
 tags_metadata = [
@@ -68,14 +69,16 @@ router = APIRouter()
 url = "https://jlp.yahooapis.jp/FuriganaService/V2/furigana"
 
 
-@router.post("/MarkFurigana/", tags=["MarkFurigana"], response_model=Response)
-async def mark_furigana(
-    request: Request,
-    client: httpx.AsyncClient = Depends(get_http_client),
-) -> Response:
-    """Receive POST request, return a Response object"""
+async def _fetch_yahoo_raw(
+    text: str, client: httpx.AsyncClient
+) -> list[WordResult] | Response:
+    """Call Yahoo Furigana API and parse the response into WordResult tokens.
 
-    # 輸入
+    Returns the token list on success, or a populated `Response` (with
+    `result=None` and `error=...`) on any failure path. The accent endpoint
+    calls this directly so it can align OJAD against the *raw* Yahoo tokenisation
+    before overrides are applied.
+    """
     headers = {
         "Content-Type": "application/json",
         "User-Agent": f"Yahoo AppID: {YAHOO_API_KEY}",
@@ -85,7 +88,7 @@ async def mark_furigana(
         "id": "1234-1",
         "jsonrpc": "2.0",
         "method": "jlp.furiganaservice.furigana",
-        "params": {"q": request.text, "grade": 1},
+        "params": {"q": text, "grade": 1},
     }
 
     try:
@@ -149,4 +152,16 @@ async def mark_furigana(
                 )
             )
 
-    return Response(status=200, result=parsed_result)
+    return parsed_result
+
+
+@router.post("/MarkFurigana/", tags=["MarkFurigana"], response_model=Response)
+async def mark_furigana(
+    request: Request,
+    client: httpx.AsyncClient = Depends(get_http_client),
+) -> Response:
+    """Receive POST request, return a Response object"""
+    raw = await _fetch_yahoo_raw(request.text, client)
+    if isinstance(raw, Response):
+        return raw
+    return Response(status=200, result=apply_furigana_overrides(raw))
