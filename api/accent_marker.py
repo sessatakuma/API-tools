@@ -250,6 +250,27 @@ async def get_ojad_result(
 numeric_pattern = re.compile(r"^-?\d+(\.\d+)?$")
 
 
+# Yahoo returns "dictionary form" furigana (no rendaku), while OJAD returns the
+# actually pronounced kana (with rendaku/sequential-voicing applied). When
+# Yahoo says "ふんかん" and OJAD says "ぷんかん", the literal startswith /
+# equality checks below would never match and the alignment would cascade-fail.
+# We compare under a normalisation that folds each voiced/half-voiced kana to
+# its voiceless base, so ぷ↔ふ, ば↔は, ご↔こ etc. all alias together.
+_VOICING_FOLD: dict[str, str] = {
+    "が": "か", "ぎ": "き", "ぐ": "く", "げ": "け", "ご": "こ",
+    "ざ": "さ", "じ": "し", "ず": "す", "ぜ": "せ", "ぞ": "そ",
+    "だ": "た", "ぢ": "ち", "づ": "つ", "で": "て", "ど": "と",
+    "ば": "は", "び": "ひ", "ぶ": "ふ", "べ": "へ", "ぼ": "ほ",
+    "ぱ": "は", "ぴ": "ひ", "ぷ": "ふ", "ぺ": "へ", "ぽ": "ほ",
+}
+
+
+def _norm(s: str) -> str:
+    """Kata→hira plus voicing fold for rendaku-tolerant alignment."""
+    hira = jaconv.kata2hira(s)
+    return "".join(_VOICING_FOLD.get(c, c) for c in hira)
+
+
 async def align_accent(
     furigana_results: list[Any], ojad_results: list[dict[str, Any]]
 ) -> list[WordAccentResult]:
@@ -264,6 +285,7 @@ async def align_accent(
         yahoo_surface = furigana_result.surface
 
         yahoo_furigana_hira = jaconv.kata2hira(yahoo_furigana)
+        yahoo_furigana_norm = _norm(yahoo_furigana)
         accents: list[AccentInfo] = []
 
         logger.debug(f"Processing Yahoo Word [{i}]: {yahoo_surface} ({yahoo_furigana})")
@@ -271,10 +293,14 @@ async def align_accent(
         # Identify if the word is numeric
         is_numeric = bool(numeric_pattern.match(yahoo_surface))
 
-        # ignore non-kana/kanji and non-numeric words
+        # Skip tokens whose furigana is entirely non-kana/kanji (pure
+        # punctuation, latin letters, etc.). `is_kana_or_kanji` also rejects
+        # the long-vowel marker ー by design, so checking `any(not …)` would
+        # bail on real katakana words like "データ" / "サッカー" — use `all`
+        # to require every char to be non-kana before skipping.
         if (
             not furigana_result.subword
-            and any(not is_kana_or_kanji(chr) for chr in yahoo_furigana)
+            and all(not is_kana_or_kanji(chr) for chr in yahoo_furigana)
             and not is_numeric
         ):
             logger.debug(" -> Skipped (Not Kana/Kanji)")
@@ -312,8 +338,8 @@ async def align_accent(
 
         # Move non-numeric OJAD index to the matching position
         if not is_numeric:
-            while ojad_idx < len(ojad_results) and not yahoo_furigana_hira.startswith(
-                jaconv.kata2hira(ojad_results[ojad_idx]["text"])
+            while ojad_idx < len(ojad_results) and not yahoo_furigana_norm.startswith(
+                _norm(ojad_results[ojad_idx]["text"])
             ):
                 ojad_idx += 1
 
@@ -321,10 +347,11 @@ async def align_accent(
         ojad_furigana = ""
         temp_accents = []  # Use temp list to avoid partial data
 
-        # Define anchor(next Yahoo furigana) for numeric mode
+        # Define anchor(next Yahoo furigana) for numeric mode (rendaku-folded so
+        # e.g. Yahoo's "ふんかん" still matches OJAD's actual reading "ぷんかん").
         next_yahoo_furigana = None
         if i + 1 < len(furigana_results):
-            next_yahoo_furigana = jaconv.kata2hira(furigana_results[i + 1].furigana)
+            next_yahoo_furigana = _norm(furigana_results[i + 1].furigana)
 
         # Backup index
         temp_ojad_idx = ojad_idx
@@ -334,9 +361,14 @@ async def align_accent(
             while temp_ojad_idx < len(ojad_results):
                 raw_text = ojad_results[temp_ojad_idx]["text"].strip()
                 ojad_text = jaconv.kata2hira(raw_text)
+                ojad_text_norm = _norm(raw_text)
 
-                # Stop if reached the anchor
-                if next_yahoo_furigana and next_yahoo_furigana.startswith(ojad_text):
+                # Stop if reached the anchor (rendaku-tolerant comparison).
+                if (
+                    next_yahoo_furigana
+                    and ojad_text_norm
+                    and next_yahoo_furigana.startswith(ojad_text_norm)
+                ):
                     break
 
                 # Stop if consumed too much data
@@ -377,10 +409,11 @@ async def align_accent(
             # Numeric mode: only check if OJAD has furigana grabbed
             is_match = len(ojad_furigana) > 0
         else:
-            # Normal mode: check length and content
-            is_match = len(ojad_furigana) == len(yahoo_furigana) and jaconv.kata2hira(
-                ojad_furigana
-            ) == jaconv.kata2hira(yahoo_furigana)
+            # Normal mode: check length and content (rendaku-tolerant).
+            is_match = (
+                len(ojad_furigana) == len(yahoo_furigana)
+                and _norm(ojad_furigana) == _norm(yahoo_furigana)
+            )
 
         if is_match:
             logger.debug(f" -> MATCHED! OJAD: {ojad_furigana}")
