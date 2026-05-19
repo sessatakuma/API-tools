@@ -118,6 +118,12 @@ def _date_overrides() -> list[FuriganaOverride]:
     entries: list[
         tuple[str, str, str, str, tuple[tuple[str, int], ...]]
     ] = [
+        # 1-10日, 14日, 20日, 24日 are irregular (ついたち, ふつか, ..., はつか).
+        # 11-31日 are regular (じゅういちにち etc.) but Yahoo often returns
+        # the literal digits as their own "furigana" for numeric tokens; the
+        # accent endpoint's align_accent also frequently misaligns numeric
+        # spans. Listing every day-of-month here gives both endpoints a
+        # deterministic reading + accent for any date.
         ("1", "１", "一", "ついたち", _atamadaka_seq("ついたち")),
         ("2", "２", "二", "ふつか", _moji_seq("ふつか")),
         ("3", "３", "三", "みっか", _moji_seq("みっか")),
@@ -128,9 +134,27 @@ def _date_overrides() -> list[FuriganaOverride]:
         ("8", "８", "八", "ようか", _moji_seq("ようか")),
         ("9", "９", "九", "ここのか", _moji_seq("ここのか")),
         ("10", "１０", "十", "とおか", _moji_seq("とおか")),
+        ("11", "１１", "十一", "じゅういちにち", _moji_seq("じゅういちにち")),
+        ("12", "１２", "十二", "じゅうににち", _moji_seq("じゅうににち")),
+        ("13", "１３", "十三", "じゅうさんにち", _moji_seq("じゅうさんにち")),
         ("14", "１４", "十四", "じゅうよっか", _moji_seq("じゅうよっか")),
+        ("15", "１５", "十五", "じゅうごにち", _moji_seq("じゅうごにち")),
+        ("16", "１６", "十六", "じゅうろくにち", _moji_seq("じゅうろくにち")),
+        ("17", "１７", "十七", "じゅうしちにち", _moji_seq("じゅうしちにち")),
+        ("18", "１８", "十八", "じゅうはちにち", _moji_seq("じゅうはちにち")),
+        ("19", "１９", "十九", "じゅうくにち", _moji_seq("じゅうくにち")),
         ("20", "２０", "二十", "はつか", _moji_seq("はつか")),
+        ("21", "２１", "二十一", "にじゅういちにち", _moji_seq("にじゅういちにち")),
+        ("22", "２２", "二十二", "にじゅうににち", _moji_seq("にじゅうににち")),
+        ("23", "２３", "二十三", "にじゅうさんにち", _moji_seq("にじゅうさんにち")),
         ("24", "２４", "二十四", "にじゅうよっか", _moji_seq("にじゅうよっか")),
+        ("25", "２５", "二十五", "にじゅうごにち", _moji_seq("にじゅうごにち")),
+        ("26", "２６", "二十六", "にじゅうろくにち", _moji_seq("にじゅうろくにち")),
+        ("27", "２７", "二十七", "にじゅうしちにち", _moji_seq("にじゅうしちにち")),
+        ("28", "２８", "二十八", "にじゅうはちにち", _moji_seq("にじゅうはちにち")),
+        ("29", "２９", "二十九", "にじゅうくにち", _moji_seq("にじゅうくにち")),
+        ("30", "３０", "三十", "さんじゅうにち", _moji_seq("さんじゅうにち")),
+        ("31", "３１", "三十一", "さんじゅういちにち", _moji_seq("さんじゅういちにち")),
     ]
     out: list[FuriganaOverride] = []
     for arabic, fullwidth, kanji, furigana, accent in entries:
