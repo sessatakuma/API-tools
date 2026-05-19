@@ -546,6 +546,27 @@ _CJK_RE = re.compile(
     "]"
 )
 
+# Sentence terminators that close a Japanese clause: kuten (。), full-width
+# question (？), full-width exclamation (！), and full-width period (．).
+# ASCII `.!?` are intentionally excluded — they appear in abbreviations,
+# decimals, and code/identifier fragments that we don't want to split on.
+# A zero-width split (lookbehind) keeps the terminator attached to the
+# preceding sentence so accent prediction still sees the clause boundary.
+_SENTENCE_SPLIT_RE = re.compile("(?<=[。！？．])")
+
+
+def _split_sentences(line: str) -> list[str]:
+    """Split a line into sentence-sized chunks for parallel processing.
+
+    OJAD's phrasing module degrades badly on long inputs (a single
+    misaligned mora can cascade across the whole paragraph), and the
+    streaming endpoint can't parallelise within a `\\n`-delimited chunk.
+    Splitting on full-width sentence terminators fixes both: each sentence
+    is short enough for OJAD to handle reliably, and they fan out across
+    the in-flight Semaphore.
+    """
+    return [s for s in _SENTENCE_SPLIT_RE.split(line) if s.strip()]
+
 # URLs are stripped before the pipeline runs. OJAD's phrasing scraper
 # produces only noise for Latin punctuation runs, and Yahoo's tokenizer
 # can fragment a URL across several alphabet/symbol tokens — both drag
@@ -688,17 +709,28 @@ async def mark_accent_stream(
     request: Request,
     client: httpx.AsyncClient = Depends(get_http_client),
 ) -> StreamingResponse:
-    """Split the input on '\\n', process each non-empty paragraph in parallel,
-    and stream one NDJSON line per chunk as soon as its preceding chunks are
-    done. The original line index is preserved as `chunk`, so consumers can
-    tell that a blank line at e.g. position 2 was skipped.
+    """Split the input on `\\n` (line) and then on full-width sentence
+    terminators (sub-chunk), process each piece in parallel under a bounded
+    semaphore, and stream one NDJSON line per piece in input order.
+
+    Each emitted object carries `{"chunk": line_idx, "subchunk": sub_idx}`:
+    `line_idx` is the original `\\n`-split index (blank lines preserve their
+    position so a client knows position 2 was empty); `sub_idx` distinguishes
+    sentences inside one line. A line with no terminator yields one
+    subchunk with `sub_idx=0`.
     """
     logger.info(f"[API] Received streaming request: {request.text!r}")
 
-    raw_lines = request.text.split("\n")
-    chunks: list[tuple[int, str]] = [
-        (idx, line) for idx, line in enumerate(raw_lines) if line.strip()
-    ]
+    # (line_idx, sub_idx, text). Long paragraphs are split into sentence-
+    # sized chunks because OJAD's phrasing predictor degrades on long
+    # inputs and a single misalignment used to cascade across the whole
+    # paragraph. Splitting also fans the work out under the semaphore.
+    chunks: list[tuple[int, int, str]] = []
+    for line_idx, line in enumerate(request.text.split("\n")):
+        if not line.strip():
+            continue
+        for sub_idx, sentence in enumerate(_split_sentences(line)):
+            chunks.append((line_idx, sub_idx, sentence))
 
     # OJAD's u-tokyo backend and (to a lesser extent) Yahoo's furigana API
     # both fall over when hit with 30+ parallel scrapes — the symptom was
@@ -714,17 +746,24 @@ async def mark_accent_stream(
     async def generate() -> AsyncIterator[bytes]:
         if not chunks:
             return
-        tasks = [asyncio.create_task(run_chunk(line)) for _, line in chunks]
+        tasks = [asyncio.create_task(run_chunk(text)) for _, _, text in chunks]
         # Yield in input order so the client renders chunks monotonically.
-        for (chunk_idx, _line), task in zip(chunks, tasks):
+        for (chunk_idx, sub_idx, _text), task in zip(chunks, tasks):
             try:
                 resp = await task
-                payload: dict[str, Any] = {"chunk": chunk_idx, **resp.model_dump()}
+                payload: dict[str, Any] = {
+                    "chunk": chunk_idx,
+                    "subchunk": sub_idx,
+                    **resp.model_dump(),
+                }
             except Exception as exc:
-                logger.exception(f"Streaming chunk {chunk_idx} failed")
+                logger.exception(
+                    f"Streaming chunk {chunk_idx}.{sub_idx} failed"
+                )
                 detail = str(exc) or repr(exc) or type(exc).__name__
                 payload = {
                     "chunk": chunk_idx,
+                    "subchunk": sub_idx,
                     "status": 500,
                     "result": None,
                     "error": {"code": 500, "message": f"Error: {detail}"},

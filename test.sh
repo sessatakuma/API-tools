@@ -38,10 +38,11 @@ for raw in sys.stdin:
     seen += 1
     d = json.loads(raw)
     chunk = d["chunk"]
+    sub = d.get("subchunk", 0)
     status = d["status"]
     err = d.get("error")
     result = d.get("result") or []
-    print(f"--- chunk {chunk}  status={status}  words={len(result)} ---")
+    print(f"--- chunk {chunk}.{sub}  status={status}  words={len(result)} ---")
     if err:
         print(f"  ERROR: {err}")
         continue
