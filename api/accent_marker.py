@@ -295,23 +295,38 @@ _FALLBACK_COST = 3.0  # cost of giving up on a single token (k=0 for kana/numeri
 _OJAD_PUNCT_TEXTS = {"、", "。", ",", ".", "?", "!", "！", "？"}
 
 
-def _edit_distance(a: str, b: str) -> int:
-    """Levenshtein distance. Used over rendaku-folded strings only."""
+# Substitutions are cheaper than insertions/deletions: a substitution keeps
+# the yahoo↔ojad mora-count alignment intact (the kind of mismatch we
+# *expect* — rendaku, reading variants like 等→とう/など), while ins/del
+# means the two sources disagree on mora count, which is much less common
+# and almost always a worse alignment. With sub<0.5, the DP correctly
+# prefers a same-length span with two substitutions (cost 0.8) over a
+# shorter span with one deletion (cost 1.0). This breaks the tie that was
+# letting OJAD's `う` from `等→とう` leak forward onto the next token.
+_SUB_COST = 0.4
+
+
+def _edit_distance(a: str, b: str) -> float:
+    """Weighted Levenshtein with sub_cost=0.4, ins/del=1.0.
+    Used over rendaku-folded strings only."""
     if a == b:
-        return 0
+        return 0.0
     if not a:
-        return len(b)
+        return float(len(b))
     if not b:
-        return len(a)
-    prev = list(range(len(b) + 1))
+        return float(len(a))
+    prev: list[float] = [float(j) for j in range(len(b) + 1)]
     for i, ca in enumerate(a, 1):
-        curr = [i] + [0] * len(b)
+        curr: list[float] = [float(i)] + [0.0] * len(b)
         for j, cb in enumerate(b, 1):
-            curr[j] = (
-                prev[j - 1]
-                if ca == cb
-                else 1 + min(prev[j - 1], prev[j], curr[j - 1])
-            )
+            if ca == cb:
+                curr[j] = prev[j - 1]
+            else:
+                curr[j] = min(
+                    prev[j - 1] + _SUB_COST,  # substitute
+                    prev[j] + 1.0,            # delete from a
+                    curr[j - 1] + 1.0,        # insert into a
+                )
         prev = curr
     return prev[-1]
 
@@ -363,7 +378,7 @@ def _match_cost(
     # "consume 12 OJAD entries to match a 2-mora Yahoo token" alignments.
     if abs(len(y_norm) - len(o_norm)) > 3:
         return _INF
-    return float(_edit_distance(y_norm, o_norm))
+    return _edit_distance(y_norm, o_norm)
 
 
 def _build_word_result(token: Any, ojad_span: list[dict[str, Any]]) -> WordAccentResult:
@@ -556,10 +571,13 @@ async def _process_accent_chunk(
 
     except Exception as e:
         logger.exception(f"Unexpected error occurred: {text}")
+        # Some httpx exceptions (PoolTimeout, ReadTimeout) have empty
+        # str(); fall back to the type name so the client sees something.
+        detail = str(e) or repr(e) or type(e).__name__
         return Response(
             status=500,
             result=None,
-            error=ErrorInfo(code=500, message=f"Error: {e}"),
+            error=ErrorInfo(code=500, message=f"Error: {detail}"),
         )
 
 
@@ -589,14 +607,21 @@ async def mark_accent_stream(
         (idx, line) for idx, line in enumerate(raw_lines) if line.strip()
     ]
 
+    # OJAD's u-tokyo backend and (to a lesser extent) Yahoo's furigana API
+    # both fall over when hit with 30+ parallel scrapes — the symptom was
+    # most chunks of a long document returning empty-string httpx errors.
+    # Cap in-flight work so well-behaved inputs still parallelise (a 4-chunk
+    # paragraph fans out fully) without hammering the upstream services.
+    semaphore = asyncio.Semaphore(4)
+
+    async def run_chunk(line: str) -> Response:
+        async with semaphore:
+            return await _process_accent_chunk(line, client)
+
     async def generate() -> AsyncIterator[bytes]:
         if not chunks:
             return
-        # Fire every chunk's Yahoo + OJAD round-trips in parallel.
-        tasks = [
-            asyncio.create_task(_process_accent_chunk(line, client))
-            for _, line in chunks
-        ]
+        tasks = [asyncio.create_task(run_chunk(line)) for _, line in chunks]
         # Yield in input order so the client renders chunks monotonically.
         for (chunk_idx, _line), task in zip(chunks, tasks):
             try:
@@ -604,11 +629,12 @@ async def mark_accent_stream(
                 payload: dict[str, Any] = {"chunk": chunk_idx, **resp.model_dump()}
             except Exception as exc:
                 logger.exception(f"Streaming chunk {chunk_idx} failed")
+                detail = str(exc) or repr(exc) or type(exc).__name__
                 payload = {
                     "chunk": chunk_idx,
                     "status": 500,
                     "result": None,
-                    "error": {"code": 500, "message": f"Error: {exc}"},
+                    "error": {"code": 500, "message": f"Error: {detail}"},
                 }
             yield (json.dumps(payload, ensure_ascii=False) + "\n").encode("utf-8")
 
