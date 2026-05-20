@@ -7,6 +7,7 @@ import json
 import logging
 import re
 import string
+from dataclasses import dataclass
 from typing import Any, AsyncIterator
 
 import httpx
@@ -18,13 +19,11 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from api.dependencies import get_http_client
-from api.furigana_marker import (
-    ErrorInfo,
-    Request,
-    WordResult,
-    mark_furigana,
+from api.reading_overrides import (
+    apply_accent_overrides,
+    apply_furigana_overrides,
 )
-from config.furigana_overrides import apply_accent_overrides
+from config.settings import YAHOO_API_KEY
 
 logger = logging.getLogger("api")
 
@@ -132,10 +131,40 @@ def is_kana_or_kanji(char: Any) -> bool:
     return False
 
 
-# class Request(BaseModel):
-#     """Class representing a request object"""
+class Request(BaseModel):
+    """Class representing a request object"""
 
-#     text: str = Field(description="The text to query")
+    text: str = Field(description="The text to query")
+
+
+class ErrorInfo(BaseModel):
+    """Class representing an error information"""
+
+    code: int = Field(description="The error code that follows JSON-RPC 2.0")
+    message: str = Field(
+        description="The error message that describe the details of an error"
+    )
+
+
+class WordResult(BaseModel):
+    """Class representing a single word from Yahoo's furigana service.
+
+    Defined here (and not in a separate module) because the only consumer of
+    the raw Yahoo tokenisation is the accent pipeline below — there is no
+    public furigana endpoint.
+    """
+
+    furigana: str = Field(description="Furigana of given kana and kanji")
+    surface: str = Field(description="The (partial of) original query text")
+    subword: list["WordResult"] = Field(
+        default_factory=list,
+        description=(
+            "A list contains more details when a word contains both kanji "
+            "and kana. Each elements in subword follow the same schema as "
+            "this parent object (containing `furigana`, `surface`, and "
+            "`subword`)."
+        ),
+    )
 
 
 class AccentInfo(BaseModel):
@@ -177,6 +206,103 @@ class Response(BaseModel):
 
 
 router = APIRouter()
+
+
+_YAHOO_FURIGANA_URL = "https://jlp.yahooapis.jp/FuriganaService/V2/furigana"
+
+
+@dataclass(frozen=True)
+class _YahooFetchError:
+    """Sentinel returned by `_fetch_yahoo_raw` on failure paths.
+
+    Carries a status code + ErrorInfo the caller can lift directly into a
+    `Response`. Modelled as a return type (rather than an exception) so the
+    outer `try/except Exception` in `_process_accent_chunk` can't swallow it
+    and turn a 408 into an opaque 500.
+    """
+
+    status: int
+    error: ErrorInfo
+
+
+async def _fetch_yahoo_raw(
+    text: str, client: httpx.AsyncClient
+) -> list[WordResult] | _YahooFetchError:
+    """Call Yahoo Furigana API and parse the response into WordResult tokens.
+
+    Returns the token list on success, or a `_YahooFetchError` on any failure
+    path. The accent pipeline applies `apply_furigana_overrides` to the raw
+    tokens before alignment (see `_process_accent_chunk`).
+    """
+    headers = {
+        "Content-Type": "application/json",
+        "User-Agent": f"Yahoo AppID: {YAHOO_API_KEY}",
+    }
+    data = {
+        "id": "1234-1",
+        "jsonrpc": "2.0",
+        "method": "jlp.furiganaservice.furigana",
+        "params": {"q": text, "grade": 1},
+    }
+
+    try:
+        response = await client.post(
+            _YAHOO_FURIGANA_URL, headers=headers, json=data
+        )
+    except httpx.TimeoutException:
+        return _YahooFetchError(
+            status=408,
+            error=ErrorInfo(code=408, message="Yahoo API request timed out"),
+        )
+    except httpx.HTTPError as e:
+        return _YahooFetchError(
+            status=500,
+            error=ErrorInfo(code=500, message=f"HTTP error: {str(e)}"),
+        )
+
+    if response.status_code != 200:
+        return _YahooFetchError(
+            status=response.status_code,
+            error=ErrorInfo(
+                code=response.status_code,
+                message=(
+                    f"Yahoo API request failed with status "
+                    f"{response.status_code}"
+                ),
+            ),
+        )
+
+    payload = response.json()
+    if "result" not in payload or "word" not in payload["result"]:
+        return _YahooFetchError(
+            status=500,
+            error=ErrorInfo(
+                code=500, message="Unexpected response format from Yahoo API"
+            ),
+        )
+
+    parsed: list[WordResult] = []
+    for word in payload["result"]["word"]:
+        if "subword" in word:
+            subword_list = [
+                WordResult(furigana=sub["furigana"], surface=sub["surface"])
+                for sub in word["subword"]
+            ]
+            parsed.append(
+                WordResult(
+                    surface=word["surface"],
+                    furigana=word["furigana"],
+                    subword=subword_list,
+                )
+            )
+        else:
+            parsed.append(
+                WordResult(
+                    surface=word["surface"],
+                    furigana=word.get("furigana", word["surface"]),
+                )
+            )
+    return parsed
 
 
 async def get_ojad_result(
@@ -663,16 +789,20 @@ async def _process_accent_chunk(
         # OJAD reads as a single phrase. align_accent's numeric-anchor logic
         # otherwise cascades-fails on these inputs because numeric tokens lack
         # any Yahoo furigana for OJAD to align against.
-        furigana_response = await mark_furigana(Request(text=stripped_text), client)
-        if furigana_response.status != 200 or not furigana_response.result:
-            logger.warning(f"Yahoo Response Empty or Invalid: {furigana_response}")
+        raw = await _fetch_yahoo_raw(stripped_text, client)
+        if isinstance(raw, _YahooFetchError):
+            logger.warning(f"Yahoo fetch failed: {raw.error.message}")
+            return Response(status=raw.status, result=None, error=raw.error)
+        furigana_results = apply_furigana_overrides(raw)
+        if not furigana_results:
+            logger.warning("Yahoo returned empty token list")
             return Response(
-                status=furigana_response.status,
+                status=500,
                 result=None,
-                error=furigana_response.error,
+                error=ErrorInfo(
+                    code=500, message="Yahoo returned empty token list"
+                ),
             )
-
-        furigana_results = furigana_response.result
         logger.debug(f"Yahoo Results Count: {len(furigana_results)}")
 
         _ojad_surface, ojad_results = await get_ojad_result(stripped_text, client)

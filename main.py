@@ -1,10 +1,9 @@
 """
-An API interface that provide two functionalities
-(1) Accent Marker   (/api/MarkAccent/)
-(2) Furigana Marker (/api/MarkFurigana/)
-(3) Usage Query    (/api/UsageQuery/)
-(4) Dictionary Query (/api/DictQuery/)
-(5) Sentence Query  (/api/SentenceQuery/)
+An API interface that provide the following functionalities
+(1) Accent Marker   (/api/MarkAccent/  +  /api/MarkAccent/stream/)
+(2) Usage Query     (/api/UsageQuery/)
+(3) Dictionary Query (/api/DictQuery/)
+(4) Sentence Query  (/api/SentenceQuery/)
 """
 
 import logging
@@ -14,7 +13,7 @@ from typing import AsyncGenerator
 import httpx
 from fastapi import FastAPI
 
-from api import accent_marker, dict_query, furigana_marker, sentence_query, usage_query
+from api import accent_marker, dict_query, sentence_query, usage_query
 
 
 @asynccontextmanager
@@ -40,7 +39,6 @@ app = FastAPI(lifespan=lifespan)
 
 # Include routers from different modules
 app.include_router(accent_marker.router, prefix="/api")
-app.include_router(furigana_marker.router, prefix="/api")
 app.include_router(usage_query.router, prefix="/api")
 app.include_router(dict_query.router, prefix="/api")
 app.include_router(sentence_query.router, prefix="/api")

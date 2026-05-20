@@ -27,8 +27,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Callable, TypeVar
 
 if TYPE_CHECKING:
-    from api.accent_marker import WordAccentResult
-    from api.furigana_marker import WordResult
+    from api.accent_marker import WordAccentResult, WordResult
 
 logger = logging.getLogger("api")
 
@@ -43,7 +42,7 @@ class ReplacementToken:
 
     `furigana=None` means: echo the resolved surface (useful for non-kana
     positions like brackets, mirroring Yahoo's own fallback in
-    `furigana_marker.py`).
+    `_fetch_yahoo_raw` in `accent_marker.py`).
 
     `accent` is a per-moji sequence of (kana, accent_marking_type) — 0=none,
     1=heiban, 2=fall — matching the existing AccentInfo schema. Empty tuple →
@@ -376,7 +375,7 @@ def _resolve_furigana(rt: ReplacementToken, surface: str) -> str:
 
 def apply_furigana_overrides(words: list[WordResult]) -> list[WordResult]:
     """Post-process Yahoo Furigana results, replacing matched spans."""
-    from api.furigana_marker import WordResult as _WordResult
+    from api.accent_marker import WordResult as _WordResult
 
     def build(
         repls: tuple[ReplacementToken, ...], pos: int, matched: str
