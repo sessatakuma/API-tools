@@ -21,6 +21,7 @@ from pydantic import BaseModel, Field
 from api.dependencies import get_http_client
 from api.reading_overrides import (
     apply_accent_overrides,
+    apply_accent_patches,
     apply_furigana_overrides,
 )
 from config.settings import YAHOO_API_KEY
@@ -147,23 +148,46 @@ class ErrorInfo(BaseModel):
 
 
 class WordResult(BaseModel):
-    """Class representing a single word from Yahoo's furigana service.
+    """Class representing a single word from Yahoo's MA (morphological
+    analysis) service.
 
-    Defined here (and not in a separate module) because the only consumer of
-    the raw Yahoo tokenisation is the accent pipeline below — there is no
-    public furigana endpoint.
+    `furigana` holds Yahoo MA's `reading` field (kana). The five POS metadata
+    fields are `None` when a token is constructed by override replacements
+    (i.e. has no MA backing) — see `apply_furigana_overrides`.
     """
 
-    furigana: str = Field(description="Furigana of given kana and kanji")
+    furigana: str = Field(description="Reading of the surface in kana")
     surface: str = Field(description="The (partial of) original query text")
     subword: list["WordResult"] = Field(
         default_factory=list,
         description=(
-            "A list contains more details when a word contains both kanji "
-            "and kana. Each elements in subword follow the same schema as "
-            "this parent object (containing `furigana`, `surface`, and "
-            "`subword`)."
+            "Reserved for compatibility — Yahoo MA does not emit subwords. "
+            "Kept on the model so override-constructed tokens still satisfy "
+            "the old schema."
         ),
+    )
+    base: str | None = Field(
+        default=None,
+        description="Lemma / base form from Yahoo MA (e.g. 食べる for 食べ)",
+    )
+    pos: str | None = Field(
+        default=None,
+        description="Part-of-speech tag from Yahoo MA (e.g. 動詞, 名詞, 接尾辞)",
+    )
+    pos1: str | None = Field(
+        default=None,
+        description=(
+            "POS sub-category from Yahoo MA (e.g. 動詞性接尾辞 for ます, "
+            "形容詞性述語接尾辞 for たい)"
+        ),
+    )
+    conjugation_type: str | None = Field(
+        default=None,
+        description="Conjugation type from Yahoo MA (活用型)",
+    )
+    conjugation_form: str | None = Field(
+        default=None,
+        description="Conjugation form from Yahoo MA (活用形)",
     )
 
 
@@ -178,7 +202,12 @@ class AccentInfo(BaseModel):
 
 
 class WordAccentResult(BaseModel):
-    """Class representing a single word result object"""
+    """Class representing a single word result object.
+
+    The POS metadata fields mirror `WordResult` and are passed through
+    `align_accent` so downstream patches (see `apply_accent_patches` in
+    `reading_overrides`) can branch on POS / conjugation.
+    """
 
     furigana: str = Field(description="Furigana of given kana and kanji")
     surface: str = Field(description="The (partial of) original query text")
@@ -187,6 +216,17 @@ class WordAccentResult(BaseModel):
         default_factory=list,
         description="""A list contains more details when a \
         word contains both kanji and kana.""",
+    )
+    base: str | None = Field(default=None, description="Lemma from Yahoo MA")
+    pos: str | None = Field(default=None, description="POS tag from Yahoo MA")
+    pos1: str | None = Field(
+        default=None, description="POS sub-category from Yahoo MA"
+    )
+    conjugation_type: str | None = Field(
+        default=None, description="Conjugation type from Yahoo MA"
+    )
+    conjugation_form: str | None = Field(
+        default=None, description="Conjugation form from Yahoo MA"
     )
 
 
@@ -208,7 +248,13 @@ class Response(BaseModel):
 router = APIRouter()
 
 
-_YAHOO_FURIGANA_URL = "https://jlp.yahooapis.jp/FuriganaService/V2/furigana"
+_YAHOO_MA_URL = "https://jlp.yahooapis.jp/MAService/V2/parse"
+
+# Yahoo MA v2 returns each morpheme as a 7-element positional array:
+#   [surface, reading, base, pos, pos1, conjugation_type, conjugation_form]
+# "*" is used as the null marker for fields that don't apply (e.g. pos1 for
+# verbs, conjugation fields for nouns); we map those to None.
+_MA_NULL = "*"
 
 
 @dataclass(frozen=True)
@@ -225,10 +271,17 @@ class _YahooFetchError:
     error: ErrorInfo
 
 
+def _ma_field(row: list[str], idx: int) -> str | None:
+    if idx >= len(row):
+        return None
+    value = row[idx]
+    return None if value == _MA_NULL else value
+
+
 async def _fetch_yahoo_raw(
     text: str, client: httpx.AsyncClient
 ) -> list[WordResult] | _YahooFetchError:
-    """Call Yahoo Furigana API and parse the response into WordResult tokens.
+    """Call Yahoo MA (Morphological Analysis) API and parse the response.
 
     Returns the token list on success, or a `_YahooFetchError` on any failure
     path. The accent pipeline applies `apply_furigana_overrides` to the raw
@@ -241,14 +294,15 @@ async def _fetch_yahoo_raw(
     data = {
         "id": "1234-1",
         "jsonrpc": "2.0",
-        "method": "jlp.furiganaservice.furigana",
-        "params": {"q": text, "grade": 1},
+        # UniDic variant — uses 助動詞 for ます/たい (vs IPADic's 接尾辞),
+        # which is the linguistic-textbook convention and matches what the
+        # Phase 4 self-check predicates look for.
+        "method": "jlp.maservice.parse.unidic",
+        "params": {"q": text},
     }
 
     try:
-        response = await client.post(
-            _YAHOO_FURIGANA_URL, headers=headers, json=data
-        )
+        response = await client.post(_YAHOO_MA_URL, headers=headers, json=data)
     except httpx.TimeoutException:
         return _YahooFetchError(
             status=408,
@@ -273,7 +327,7 @@ async def _fetch_yahoo_raw(
         )
 
     payload = response.json()
-    if "result" not in payload or "word" not in payload["result"]:
+    if "result" not in payload or "tokens" not in payload["result"]:
         return _YahooFetchError(
             status=500,
             error=ErrorInfo(
@@ -282,26 +336,22 @@ async def _fetch_yahoo_raw(
         )
 
     parsed: list[WordResult] = []
-    for word in payload["result"]["word"]:
-        if "subword" in word:
-            subword_list = [
-                WordResult(furigana=sub["furigana"], surface=sub["surface"])
-                for sub in word["subword"]
-            ]
-            parsed.append(
-                WordResult(
-                    surface=word["surface"],
-                    furigana=word["furigana"],
-                    subword=subword_list,
-                )
+    for row in payload["result"]["tokens"]:
+        if not isinstance(row, list) or len(row) < 2:
+            continue
+        surface = row[0]
+        reading = row[1] or surface
+        parsed.append(
+            WordResult(
+                surface=surface,
+                furigana=reading,
+                base=_ma_field(row, 2),
+                pos=_ma_field(row, 3),
+                pos1=_ma_field(row, 4),
+                conjugation_type=_ma_field(row, 5),
+                conjugation_form=_ma_field(row, 6),
             )
-        else:
-            parsed.append(
-                WordResult(
-                    surface=word["surface"],
-                    furigana=word.get("furigana", word["surface"]),
-                )
-            )
+        )
     return parsed
 
 
@@ -517,6 +567,16 @@ def _build_word_result(token: Any, ojad_span: list[dict[str, Any]]) -> WordAccen
         if token.subword
         else []
     )
+    # Carry MA's POS metadata through alignment so downstream patches can
+    # branch on it. Tokens constructed by override replacements (no MA
+    # backing) will have these as None — that's fine.
+    pos_meta = {
+        "base": getattr(token, "base", None),
+        "pos": getattr(token, "pos", None),
+        "pos1": getattr(token, "pos1", None),
+        "conjugation_type": getattr(token, "conjugation_type", None),
+        "conjugation_form": getattr(token, "conjugation_form", None),
+    }
 
     if not ojad_span:
         # k=0 path: emit type-0 fallback so the downstream override pass and
@@ -532,6 +592,7 @@ def _build_word_result(token: Any, ojad_span: list[dict[str, Any]]) -> WordAccen
                 )
             ],
             subword=subword,
+            **pos_meta,
         )
 
     # Drop OJAD entries with empty text (phrase-boundary sentinels). They
@@ -549,6 +610,7 @@ def _build_word_result(token: Any, ojad_span: list[dict[str, Any]]) -> WordAccen
                 )
             ],
             subword=subword,
+            **pos_meta,
         )
     accents = [
         AccentInfo(
@@ -567,6 +629,7 @@ def _build_word_result(token: Any, ojad_span: list[dict[str, Any]]) -> WordAccen
         furigana=display,
         accent=accents,
         subword=subword,
+        **pos_meta,
     )
 
 
@@ -809,6 +872,10 @@ async def _process_accent_chunk(
 
         final_results = await align_accent(furigana_results, ojad_results)
         final_results = apply_accent_overrides(final_results)
+        # POS-driven suffix patches run after the full-span overrides so
+        # that tokens replaced by overrides (pos=None) are skipped by the
+        # patch predicates.
+        final_results = apply_accent_patches(final_results)
         final_results = _restore_urls(final_results, urls)
 
         return Response(status=200, result=final_results)
