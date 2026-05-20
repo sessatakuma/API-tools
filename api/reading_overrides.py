@@ -82,6 +82,40 @@ def _atamadaka_seq(text: str) -> tuple[tuple[str, int], ...]:
     return ((text[0], _FALL),) + tuple((c, _HEIBAN) for c in text[1:])
 
 
+# Numeric variant helpers: keep N-prefixed patterns (N日, N日間, N歳) from
+# repeating the (arabic, fullwidth, kanji) triple per row.
+
+_FULLWIDTH_TRANS = str.maketrans("0123456789", "０１２３４５６７８９")
+
+
+def _int_to_kanji(n: int) -> str:
+    """Traditional kanji numeral for n (1-99).
+
+    Examples: 1→'一', 10→'十', 14→'十四', 20→'二十', 24→'二十四', 31→'三十一'.
+    """
+    if not 1 <= n <= 99:
+        raise ValueError(f"_int_to_kanji supports 1-99, got {n}")
+    digits = "〇一二三四五六七八九"
+    tens, ones = divmod(n, 10)
+    if tens == 0:
+        return digits[ones]
+    tens_part = "十" if tens == 1 else digits[tens] + "十"
+    return tens_part + (digits[ones] if ones else "")
+
+
+def _numeric_pattern(n: int) -> str:
+    """Regex alternation matching n in arabic / full-width / traditional-kanji.
+
+    Alternatives are emitted longest-first so multi-char kanji forms like
+    '二十四' aren't shadowed by their numeric-form prefixes.
+    """
+    arabic = str(n)
+    fullwidth = arabic.translate(_FULLWIDTH_TRANS)
+    kanji = _int_to_kanji(n)
+    variants = sorted({arabic, fullwidth, kanji}, key=len, reverse=True)
+    return "(?:" + "|".join(variants) + ")"
+
+
 def _day_of_week_overrides() -> list[FuriganaOverride]:
     readings: list[tuple[str, str]] = [
         ("月", "げつ"),
@@ -113,64 +147,59 @@ def _day_of_week_overrides() -> list[FuriganaOverride]:
 
 
 def _date_overrides() -> list[FuriganaOverride]:
-    # (arabic, fullwidth, kanji, furigana, accent)
-    entries: list[
-        tuple[str, str, str, str, tuple[tuple[str, int], ...]]
-    ] = [
-        # 1-10日, 14日, 20日, 24日 are irregular (ついたち, ふつか, ..., はつか).
-        # 11-31日 are regular (じゅういちにち etc.) but Yahoo often returns
-        # the literal digits as their own "furigana" for numeric tokens; the
-        # accent endpoint's align_accent also frequently misaligns numeric
-        # spans. Listing every day-of-month here gives both endpoints a
-        # deterministic reading + accent for any date.
-        ("1", "１", "一", "ついたち", _atamadaka_seq("ついたち")),
-        ("2", "２", "二", "ふつか", _moji_seq("ふつか")),
-        ("3", "３", "三", "みっか", _moji_seq("みっか")),
-        ("4", "４", "四", "よっか", _moji_seq("よっか")),
-        ("5", "５", "五", "いつか", _moji_seq("いつか")),
-        ("6", "６", "六", "むいか", _moji_seq("むいか")),
-        ("7", "７", "七", "なのか", _moji_seq("なのか")),
-        ("8", "８", "八", "ようか", _moji_seq("ようか")),
-        ("9", "９", "九", "ここのか", _moji_seq("ここのか")),
-        ("10", "１０", "十", "とおか", _moji_seq("とおか")),
-        ("11", "１１", "十一", "じゅういちにち", _moji_seq("じゅういちにち")),
-        ("12", "１２", "十二", "じゅうににち", _moji_seq("じゅうににち")),
-        ("13", "１３", "十三", "じゅうさんにち", _moji_seq("じゅうさんにち")),
-        ("14", "１４", "十四", "じゅうよっか", _moji_seq("じゅうよっか")),
-        ("15", "１５", "十五", "じゅうごにち", _moji_seq("じゅうごにち")),
-        ("16", "１６", "十六", "じゅうろくにち", _moji_seq("じゅうろくにち")),
-        ("17", "１７", "十七", "じゅうしちにち", _moji_seq("じゅうしちにち")),
-        ("18", "１８", "十八", "じゅうはちにち", _moji_seq("じゅうはちにち")),
-        ("19", "１９", "十九", "じゅうくにち", _moji_seq("じゅうくにち")),
-        ("20", "２０", "二十", "はつか", _moji_seq("はつか")),
-        ("21", "２１", "二十一", "にじゅういちにち", _moji_seq("にじゅういちにち")),
-        ("22", "２２", "二十二", "にじゅうににち", _moji_seq("にじゅうににち")),
-        ("23", "２３", "二十三", "にじゅうさんにち", _moji_seq("にじゅうさんにち")),
-        ("24", "２４", "二十四", "にじゅうよっか", _moji_seq("にじゅうよっか")),
-        ("25", "２５", "二十五", "にじゅうごにち", _moji_seq("にじゅうごにち")),
-        ("26", "２６", "二十六", "にじゅうろくにち", _moji_seq("にじゅうろくにち")),
-        ("27", "２７", "二十七", "にじゅうしちにち", _moji_seq("にじゅうしちにち")),
-        ("28", "２８", "二十八", "にじゅうはちにち", _moji_seq("にじゅうはちにち")),
-        ("29", "２９", "二十九", "にじゅうくにち", _moji_seq("にじゅうくにち")),
-        ("30", "３０", "三十", "さんじゅうにち", _moji_seq("さんじゅうにち")),
-        ("31", "３１", "三十一", "さんじゅういちにち", _moji_seq("さんじゅういちにち")),
+    # 1-10日, 14日, 20日, 24日 are irregular (ついたち, ふつか, ..., はつか).
+    # 11-31日 are regular (じゅういちにち etc.) but Yahoo often returns the
+    # literal digits as their own "furigana" for numeric tokens; the accent
+    # endpoint's align_accent also frequently misaligns numeric spans.
+    # Listing every day-of-month here gives both endpoints a deterministic
+    # reading + accent for any date.
+    #
+    # Only 1日 (ついたち) is atamadaka — the rest sit in heiban-style.
+    readings: list[tuple[int, str, tuple[tuple[str, int], ...]]] = [
+        (1, "ついたち", _atamadaka_seq("ついたち")),
+        (2, "ふつか", _moji_seq("ふつか")),
+        (3, "みっか", _moji_seq("みっか")),
+        (4, "よっか", _moji_seq("よっか")),
+        (5, "いつか", _moji_seq("いつか")),
+        (6, "むいか", _moji_seq("むいか")),
+        (7, "なのか", _moji_seq("なのか")),
+        (8, "ようか", _moji_seq("ようか")),
+        (9, "ここのか", _moji_seq("ここのか")),
+        (10, "とおか", _moji_seq("とおか")),
+        (11, "じゅういちにち", _moji_seq("じゅういちにち")),
+        (12, "じゅうににち", _moji_seq("じゅうににち")),
+        (13, "じゅうさんにち", _moji_seq("じゅうさんにち")),
+        (14, "じゅうよっか", _moji_seq("じゅうよっか")),
+        (15, "じゅうごにち", _moji_seq("じゅうごにち")),
+        (16, "じゅうろくにち", _moji_seq("じゅうろくにち")),
+        (17, "じゅうしちにち", _moji_seq("じゅうしちにち")),
+        (18, "じゅうはちにち", _moji_seq("じゅうはちにち")),
+        (19, "じゅうくにち", _moji_seq("じゅうくにち")),
+        (20, "はつか", _moji_seq("はつか")),
+        (21, "にじゅういちにち", _moji_seq("にじゅういちにち")),
+        (22, "にじゅうににち", _moji_seq("にじゅうににち")),
+        (23, "にじゅうさんにち", _moji_seq("にじゅうさんにち")),
+        (24, "にじゅうよっか", _moji_seq("にじゅうよっか")),
+        (25, "にじゅうごにち", _moji_seq("にじゅうごにち")),
+        (26, "にじゅうろくにち", _moji_seq("にじゅうろくにち")),
+        (27, "にじゅうしちにち", _moji_seq("にじゅうしちにち")),
+        (28, "にじゅうはちにち", _moji_seq("にじゅうはちにち")),
+        (29, "にじゅうくにち", _moji_seq("にじゅうくにち")),
+        (30, "さんじゅうにち", _moji_seq("さんじゅうにち")),
+        (31, "さんじゅういちにち", _moji_seq("さんじゅういちにち")),
     ]
-    out: list[FuriganaOverride] = []
-    for arabic, fullwidth, kanji, furigana, accent in entries:
-        # Longest alternatives first so "二十四" doesn't get shadowed by "二".
-        pattern = re.compile(
-            rf"{_NOT_NUM_BEHIND}(?:{kanji}|{fullwidth}|{arabic})日{_NOT_NUM_AHEAD}"
+    return [
+        FuriganaOverride(
+            pattern=re.compile(
+                rf"{_NOT_NUM_BEHIND}{_numeric_pattern(n)}日{_NOT_NUM_AHEAD}"
+            ),
+            replacements=(
+                ReplacementToken(furigana=furigana, accent=accent),
+            ),
+            description=f"特殊日期 {n}日",
         )
-        out.append(
-            FuriganaOverride(
-                pattern=pattern,
-                replacements=(
-                    ReplacementToken(furigana=furigana, accent=accent),
-                ),
-                description=f"特殊日期 {arabic}日",
-            )
-        )
-    return out
+        for n, furigana, accent in readings
+    ]
 
 
 def _duration_overrides() -> list[FuriganaOverride]:
@@ -188,56 +217,73 @@ def _duration_overrides() -> list[FuriganaOverride]:
     - `7日間` → `しちにちかん` (preferred in modern technical writing
       over the older `なのかかん`).
     """
-    entries: list[tuple[str, str, str, str]] = [
-        ("1", "１", "一", "いちにちかん"),
-        ("2", "２", "二", "ふつかかん"),
-        ("3", "３", "三", "みっかかん"),
-        ("4", "４", "四", "よっかかん"),
-        ("5", "５", "五", "いつかかん"),
-        ("6", "６", "六", "むいかかん"),
-        ("7", "７", "七", "しちにちかん"),
-        ("8", "８", "八", "ようかかん"),
-        ("9", "９", "九", "ここのかかん"),
-        ("10", "１０", "十", "とおかかん"),
-        ("11", "１１", "十一", "じゅういちにちかん"),
-        ("12", "１２", "十二", "じゅうににちかん"),
-        ("13", "１３", "十三", "じゅうさんにちかん"),
-        ("14", "１４", "十四", "じゅうよっかかん"),
-        ("15", "１５", "十五", "じゅうごにちかん"),
-        ("16", "１６", "十六", "じゅうろくにちかん"),
-        ("17", "１７", "十七", "じゅうしちにちかん"),
-        ("18", "１８", "十八", "じゅうはちにちかん"),
-        ("19", "１９", "十九", "じゅうくにちかん"),
-        ("20", "２０", "二十", "はつかかん"),
-        ("21", "２１", "二十一", "にじゅういちにちかん"),
-        ("22", "２２", "二十二", "にじゅうににちかん"),
-        ("23", "２３", "二十三", "にじゅうさんにちかん"),
-        ("24", "２４", "二十四", "にじゅうよっかかん"),
-        ("25", "２５", "二十五", "にじゅうごにちかん"),
-        ("26", "２６", "二十六", "にじゅうろくにちかん"),
-        ("27", "２７", "二十七", "にじゅうしちにちかん"),
-        ("28", "２８", "二十八", "にじゅうはちにちかん"),
-        ("29", "２９", "二十九", "にじゅうくにちかん"),
-        ("30", "３０", "三十", "さんじゅうにちかん"),
-        ("31", "３１", "三十一", "さんじゅういちにちかん"),
+    readings: list[tuple[int, str]] = [
+        (1, "いちにちかん"),
+        (2, "ふつかかん"),
+        (3, "みっかかん"),
+        (4, "よっかかん"),
+        (5, "いつかかん"),
+        (6, "むいかかん"),
+        (7, "しちにちかん"),
+        (8, "ようかかん"),
+        (9, "ここのかかん"),
+        (10, "とおかかん"),
+        (11, "じゅういちにちかん"),
+        (12, "じゅうににちかん"),
+        (13, "じゅうさんにちかん"),
+        (14, "じゅうよっかかん"),
+        (15, "じゅうごにちかん"),
+        (16, "じゅうろくにちかん"),
+        (17, "じゅうしちにちかん"),
+        (18, "じゅうはちにちかん"),
+        (19, "じゅうくにちかん"),
+        (20, "はつかかん"),
+        (21, "にじゅういちにちかん"),
+        (22, "にじゅうににちかん"),
+        (23, "にじゅうさんにちかん"),
+        (24, "にじゅうよっかかん"),
+        (25, "にじゅうごにちかん"),
+        (26, "にじゅうろくにちかん"),
+        (27, "にじゅうしちにちかん"),
+        (28, "にじゅうはちにちかん"),
+        (29, "にじゅうくにちかん"),
+        (30, "さんじゅうにちかん"),
+        (31, "さんじゅういちにちかん"),
     ]
-    out: list[FuriganaOverride] = []
-    for arabic, fullwidth, kanji, furigana in entries:
-        pattern = re.compile(
-            rf"{_NOT_NUM_BEHIND}(?:{kanji}|{fullwidth}|{arabic})日間"
+    return [
+        FuriganaOverride(
+            pattern=re.compile(
+                rf"{_NOT_NUM_BEHIND}{_numeric_pattern(n)}日間"
+            ),
+            replacements=(
+                ReplacementToken(furigana=furigana, accent=_moji_seq(furigana)),
+            ),
+            description=f"期間 {n}日間",
         )
-        out.append(
-            FuriganaOverride(
-                pattern=pattern,
-                replacements=(
-                    ReplacementToken(
-                        furigana=furigana, accent=_moji_seq(furigana)
-                    ),
+        for n, furigana in readings
+    ]
+
+
+def _age_overrides() -> list[FuriganaOverride]:
+    """Irregular age readings.
+
+    20歳 / 二十歳 (and the casual 才 variant) → はたち, not the regular
+    にじゅっさい. Only 20 is irregular for ages; the rest are systematic
+    so we don't need a 1-99 table here.
+    """
+    return [
+        FuriganaOverride(
+            pattern=re.compile(
+                rf"{_NOT_NUM_BEHIND}{_numeric_pattern(20)}[歳才]{_NOT_NUM_AHEAD}"
+            ),
+            replacements=(
+                ReplacementToken(
+                    furigana="はたち", accent=_atamadaka_seq("はたち")
                 ),
-                description=f"期間 {arabic}日間",
-            )
-        )
-    return out
+            ),
+            description="20歳 → はたち",
+        ),
+    ]
 
 
 # Order matters: _collect_matches breaks ties on (start, -length) and
@@ -245,7 +291,10 @@ def _duration_overrides() -> list[FuriganaOverride]:
 # strictly longer than `N日` at the same start, so duration entries
 # automatically win over date entries for the same N when 間 follows.
 OVERRIDES: list[FuriganaOverride] = (
-    _day_of_week_overrides() + _duration_overrides() + _date_overrides()
+    _day_of_week_overrides()
+    + _duration_overrides()
+    + _date_overrides()
+    + _age_overrides()
 )
 
 
