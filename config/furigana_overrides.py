@@ -174,8 +174,79 @@ def _date_overrides() -> list[FuriganaOverride]:
     return out
 
 
+def _duration_overrides() -> list[FuriganaOverride]:
+    """N日間 (counter for days as a duration) expansions.
+
+    Yahoo tokenises e.g. `1日間` as [`1`, `日間`] and gives the numeric
+    token no furigana (its result is just the literal digit), so the
+    furigana endpoint surfaces unreadable output like `1にちかん`. We
+    override the full N日間 span so the user sees a complete reading.
+
+    Most readings are the existing date reading + `かん`, with two
+    intentional deviations:
+    - `1日間` → `いちにちかん` (NOT `ついたちかん` — the 1st-of-month
+      reading is impossible when 1日 is a duration).
+    - `7日間` → `しちにちかん` (preferred in modern technical writing
+      over the older `なのかかん`).
+    """
+    entries: list[tuple[str, str, str, str]] = [
+        ("1", "１", "一", "いちにちかん"),
+        ("2", "２", "二", "ふつかかん"),
+        ("3", "３", "三", "みっかかん"),
+        ("4", "４", "四", "よっかかん"),
+        ("5", "５", "五", "いつかかん"),
+        ("6", "６", "六", "むいかかん"),
+        ("7", "７", "七", "しちにちかん"),
+        ("8", "８", "八", "ようかかん"),
+        ("9", "９", "九", "ここのかかん"),
+        ("10", "１０", "十", "とおかかん"),
+        ("11", "１１", "十一", "じゅういちにちかん"),
+        ("12", "１２", "十二", "じゅうににちかん"),
+        ("13", "１３", "十三", "じゅうさんにちかん"),
+        ("14", "１４", "十四", "じゅうよっかかん"),
+        ("15", "１５", "十五", "じゅうごにちかん"),
+        ("16", "１６", "十六", "じゅうろくにちかん"),
+        ("17", "１７", "十七", "じゅうしちにちかん"),
+        ("18", "１８", "十八", "じゅうはちにちかん"),
+        ("19", "１９", "十九", "じゅうくにちかん"),
+        ("20", "２０", "二十", "はつかかん"),
+        ("21", "２１", "二十一", "にじゅういちにちかん"),
+        ("22", "２２", "二十二", "にじゅうににちかん"),
+        ("23", "２３", "二十三", "にじゅうさんにちかん"),
+        ("24", "２４", "二十四", "にじゅうよっかかん"),
+        ("25", "２５", "二十五", "にじゅうごにちかん"),
+        ("26", "２６", "二十六", "にじゅうろくにちかん"),
+        ("27", "２７", "二十七", "にじゅうしちにちかん"),
+        ("28", "２８", "二十八", "にじゅうはちにちかん"),
+        ("29", "２９", "二十九", "にじゅうくにちかん"),
+        ("30", "３０", "三十", "さんじゅうにちかん"),
+        ("31", "３１", "三十一", "さんじゅういちにちかん"),
+    ]
+    out: list[FuriganaOverride] = []
+    for arabic, fullwidth, kanji, furigana in entries:
+        pattern = re.compile(
+            rf"{_NOT_NUM_BEHIND}(?:{kanji}|{fullwidth}|{arabic})日間"
+        )
+        out.append(
+            FuriganaOverride(
+                pattern=pattern,
+                replacements=(
+                    ReplacementToken(
+                        furigana=furigana, accent=_moji_seq(furigana)
+                    ),
+                ),
+                description=f"期間 {arabic}日間",
+            )
+        )
+    return out
+
+
+# Order matters: _collect_matches breaks ties on (start, -length) and
+# discards anything overlapping an earlier pick. `N日間` (3-4 chars) is
+# strictly longer than `N日` at the same start, so duration entries
+# automatically win over date entries for the same N when 間 follows.
 OVERRIDES: list[FuriganaOverride] = (
-    _day_of_week_overrides() + _date_overrides()
+    _day_of_week_overrides() + _duration_overrides() + _date_overrides()
 )
 
 
