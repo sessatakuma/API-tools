@@ -207,14 +207,7 @@ Download [uv](https://docs.astral.sh/uv/getting-started/installation/) and run t
 uv sync
 ```
 
-After build the environment, you should also obtain a Yahoo API Client ID from [Yahoo Japan website](https://developer.yahoo.co.jp/sitemap/).
-
-For local standalone development, copy `.env.example` to `.env` in this directory and fill in the values:
-
-```env
-YAHOO_API_KEY=<Our Yahoo API Key>   # required — app asserts on startup
-API_TOOLS_PORT=8000                 # optional — host-side port for docker compose (default 8000)
-```
+No environment variables or external API keys are required — the accent pipeline ships with local fugashi + UniDic + OJAD scraping.
 
 Authentication (`X-API-KEY`), CORS, and trusted-host middleware were intentionally removed; this service is expected to run behind the parent backend or on a private network.
 

@@ -14,8 +14,8 @@ RUN uv sync --frozen --no-dev --no-install-project
 COPY . .
 
 # Compile only our app code (skip .venv) and drop the .py sources
-RUN python -m compileall -b -q main.py api config \
-    && find main.py api config -name "*.py" -delete
+RUN python -m compileall -b -q main.py api \
+    && find main.py api -name "*.py" -delete
 
 FROM python:3.11-slim
 
@@ -30,7 +30,6 @@ WORKDIR /app
 COPY --from=builder /app/.venv /app/.venv
 COPY --from=builder /app/main.pyc /app/main.pyc
 COPY --from=builder /app/api /app/api
-COPY --from=builder /app/config /app/config
 
 # Set PATH to use venv binaries
 ENV PATH="/app/.venv/bin:$PATH"
