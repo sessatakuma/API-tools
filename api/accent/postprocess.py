@@ -258,11 +258,13 @@ def apply_furigana_toggles(
     have ASCII surfaces but Japanese furigana fugashi/UniDic resolved
     for the unit — wiping those would lose the unit reading.
 
-    Katakana (toggle off): clear only the top-level `furigana` (a
-    learner who reads katakana doesn't need ruby on コーヒー), but keep
-    `accent` so callers can still render the pitch curve over the
-    surface text. Each AccentInfo's per-mora furigana lets the client
-    align pitch indicators with the katakana morae.
+    Katakana (toggle off): clear the top-level `furigana` AND every
+    `AccentInfo.furigana` — clients that draw ruby from the per-mora
+    field would otherwise render hiragana copies (`ふ`, `ら`, `ん`, `つ`)
+    on top of katakana surfaces (`フランツ`) despite the toggle saying
+    "no furigana". `accent_marking_type` and `length` are preserved so
+    the pitch overlay can still be drawn against the katakana surface
+    chars (length-aware iteration handles small kana like `ァ` / `ェ`).
 
     Tokens containing kanji are never touched, even if mixed with
     English/katakana, because their reading is still load-bearing.
@@ -294,11 +296,19 @@ def apply_furigana_toggles(
                 )
             )
         elif not render_katakana and _is_pure_katakana_surface(surface):
+            silent_accent = [
+                AccentInfo(
+                    furigana="",
+                    accent_marking_type=a.accent_marking_type,
+                    length=a.length,
+                )
+                for a in w.accent
+            ]
             out.append(
                 WordAccentResult(
                     surface=surface,
                     furigana="",
-                    accent=w.accent,
+                    accent=silent_accent,
                     subword=w.subword,
                     base=w.base,
                     pos=w.pos,
