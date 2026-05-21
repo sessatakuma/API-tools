@@ -16,7 +16,7 @@ flowchart LR
   text([text input])
   yahoo["Yahoo Furigana HTTP<br/>(furigana.py)<br/>tokens + readings"]
   ojad["OJAD scrape<br/>(ojad.py)<br/>per-mora pitch contour"]
-  align["DP alignment<br/>(align.py)<br/>align_accent"]
+  align["Greedy alignment<br/>(align.py)<br/>align_accent"]
   out([WordAccentResult list])
 
   text --> yahoo

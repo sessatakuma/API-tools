@@ -119,7 +119,7 @@ def is_kana_or_kanji(char: Any) -> bool:
     """Check whether given character is kana or kanji (ignore half-width kana)."""
     exception_symbols = ["゠", "・", "ー", "ヽ", "ヾ", "ヿ"]
     if char in exception_symbols:
-        # '゠', '・', 'ー', 'ヽ', 'ヾ', 'ヿ' which should be regard as punchutation
+        # '゠', '・', 'ー', 'ヽ', 'ヾ', 'ヿ' which should be regarded as punctuation
         return False
     kana = range(0x3040, 0x30FF + 1)
     kanji = range(0x4E00, 0x9FFF + 1)
