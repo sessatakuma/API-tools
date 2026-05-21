@@ -338,6 +338,24 @@ def _match_cost(
         empty_in_span = sum(1 for t in span_texts if not t)
         return 0.01 * empty_in_span
 
+    # Override-synthesized tokens: the regex layer
+    # (`reading_overrides.apply_furigana_overrides`) merges spans like
+    # `20歳` into a single WordResult with a prescribed `furigana`
+    # (`はたち`) that does NOT match OJAD's reading of the same surface
+    # (`にじゅっさい`, 5 morae vs はたち's 3). Without a free-consume
+    # branch, the DP gives this token just 3 morae and the leftover
+    # `さい` cascades onto the next kana token (the `20歳 → の → 私`
+    # leak symptom). Override-merged tokens lose their UniDic backing
+    # (`base` and `pos` are both None — `ReplacementToken.build`
+    # constructs WordResults without MA metadata), which is the
+    # discriminator here. `apply_accent_overrides` rewrites the accent
+    # post-align so whatever marks DP picked up from OJAD are discarded.
+    if getattr(token, "base", None) is None and getattr(token, "pos", None) is None:
+        if k == 0:
+            return _FALLBACK_COST
+        upper = max(4, len(token.surface) * 4 + 4)
+        return 0.0 if k <= upper else float(k - upper)
+
     # Kana / kanji token: compare under rendaku fold. The OJAD-punct
     # guard above already kicks in for any non-punct token, so by the
     # time we reach the kana branch the span is guaranteed punct-free.
