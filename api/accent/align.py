@@ -208,12 +208,40 @@ def _is_punct_token(furigana: str, is_numeric: bool) -> bool:
     return all(not is_kana_or_kanji(c) for c in furigana)
 
 
+def _is_english_compound_surface(surface: str) -> bool:
+    """Acronym / model-code surface containing at least one ASCII letter.
+
+    Matches acronym tokens fused by `tokenizer.tag_local` — both the
+    pure-alphanumeric variant (`G2P`, `iPhone7`, `H2O`) and the
+    bridge-separator variant (`PSP-1000`, `Wi-Fi`, `RTX-4090`,
+    `foo_bar1`, `Wifi.7`, `Python3.11`). All such surfaces get the
+    same free-consume treatment as numerics in `_match_cost`. Without
+    this branch the fused surface would fall through to the kana path
+    and edit-distance against OJAD's kana would push the DP into k=0 /
+    partial-consume splits, leaking morae onto the next Japanese token.
+    Mirrors the rule in `postprocess._is_pure_english_surface` so the
+    toggle wipe and the aligner agree on which surfaces qualify.
+    """
+    if not surface:
+        return False
+    has_letter = False
+    for c in surface:
+        if "a" <= c <= "z" or "A" <= c <= "Z":
+            has_letter = True
+        elif "0" <= c <= "9" or c in ("-", "_", "."):
+            continue
+        else:
+            return False
+    return has_letter
+
+
 def _match_cost(
     token: WordResult,
     span_texts: list[str],
     is_numeric: bool,
     is_punct: bool,
     is_readable_compound: bool = False,
+    is_english_compound: bool = False,
 ) -> float:
     """Cost of letting `token` consume the given OJAD-text span."""
     k = len(span_texts)
@@ -235,6 +263,30 @@ def _match_cost(
             if stripped == yahoo_stripped:
                 return 0.0
         return _INF
+
+    if is_english_compound:
+        # Surface is `G2P` / `iPhone7` / `Wifi.7` (merged alphanumeric
+        # run) — same situation as readable_compound: no kana to align
+        # against, OJAD has spelled the whole acronym out as one phrase.
+        # Accept any reasonable span at cost 0 so the morae stay
+        # anchored on the merged token; `apply_furigana_toggles` wipes
+        # them downstream.
+        #
+        # Checked BEFORE the OJAD-punct guard because OJAD sometimes
+        # injects a `。` mid-stream when it normalises a `.` separator
+        # (`Wifi.7` → echoed as `Wifi。7`). That punct entry needs to
+        # be absorbed by this same merged token rather than blocked —
+        # otherwise the morae after the `。` cascade onto the next
+        # Japanese token. `_build_word_result` filters those punct
+        # entries back out so they don't surface as ruby when the
+        # English toggle is on.
+        if k == 0:
+            return _FALLBACK_COST
+        # Loose upper: ~4 morae per char (covers OJAD's longest letter
+        # spellings, e.g. `M` → エム = 2 morae, but headroom for the
+        # digit pieces that can spell out to 4 morae like ナナ for 7).
+        upper = max(4, len(token.surface) * 4)
+        return 0.0 if k <= upper else float(k - upper)
 
     # Beyond this point the token wants OJAD morae as its reading.
     # OJAD's punct entries (、 。 , . ! ?) carry no spoken kana and must
@@ -363,9 +415,21 @@ def _build_word_result(
             lexical_kernel_alts=lexical_kernel_alts,
         )
 
-    # Drop OJAD entries with empty text (phrase-boundary sentinels). They
-    # carry no audible mora and would surface as a stray "(…||0)" row.
-    voiced_span = [e for e in ojad_span if e["text"]]
+    # Drop OJAD entries with empty text (phrase-boundary sentinels) and,
+    # for english-compound tokens, the OJAD-punct entries we let
+    # `_match_cost` absorb at cost 0. Those punct entries are OJAD
+    # artefacts from normalising `.` → `。` mid-acronym (`Wifi.7`); they
+    # carry no spoken mora and would surface as a stray `。` in the
+    # ruby when `render_english_furigana=True`.
+    is_english_compound = not is_readable_compound and _is_english_compound_surface(
+        token_surface
+    )
+    if is_english_compound:
+        voiced_span = [
+            e for e in ojad_span if e["text"] and e["text"] not in _OJAD_PUNCT_TEXTS
+        ]
+    else:
+        voiced_span = [e for e in ojad_span if e["text"]]
     if not voiced_span:
         return WordAccentResult(
             surface=token_surface,
@@ -443,12 +507,24 @@ async def align_accent(
         return [_fallback_word(t) for t in furigana_results]
 
     # Pre-compute per-token classification and OJAD texts.
-    token_kinds: list[tuple[bool, bool, bool]] = []
+    token_kinds: list[tuple[bool, bool, bool, bool]] = []
     for t in furigana_results:
         is_num = bool(NUMERIC_PATTERN.match(t.surface))
         is_compound = bool(READABLE_COMPOUND_RE.match(t.surface))
-        is_pct = (not is_compound) and _is_punct_token(t.furigana, is_num)
-        token_kinds.append((is_num, is_pct, is_compound))
+        # English-compound takes precedence over numeric for surfaces like
+        # `G2P`: NUMERIC_PATTERN does not match (letters present), but a
+        # one-char numeric inside the run shouldn't reclassify the merged
+        # token. is_num stays False here because the merged surface has
+        # letters; the check is for clarity.
+        is_eng = (
+            (not is_compound)
+            and (not is_num)
+            and _is_english_compound_surface(t.surface)
+        )
+        is_pct = (
+            (not is_compound) and (not is_eng) and _is_punct_token(t.furigana, is_num)
+        )
+        token_kinds.append((is_num, is_pct, is_compound, is_eng))
     ojad_texts = [e["text"] for e in ojad_results]
 
     # dp[i][j] = best cost aligning tokens [0..i) to ojad entries [0..j).
@@ -458,7 +534,7 @@ async def align_accent(
 
     for i in range(n):
         token = furigana_results[i]
-        is_num, is_pct, is_compound = token_kinds[i]
+        is_num, is_pct, is_compound, is_eng = token_kinds[i]
         for j in range(m + 1):
             base = dp[i][j]
             if base == _INF:
@@ -466,7 +542,12 @@ async def align_accent(
             k_limit = min(_K_MAX, m - j)
             for k in range(0, k_limit + 1):
                 cost = _match_cost(
-                    token, ojad_texts[j : j + k], is_num, is_pct, is_compound
+                    token,
+                    ojad_texts[j : j + k],
+                    is_num,
+                    is_pct,
+                    is_compound,
+                    is_eng,
                 )
                 if cost == _INF:
                     continue
