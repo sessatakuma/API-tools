@@ -1,30 +1,32 @@
-"""
-Predefined regex override layer for Yahoo Furigana / Suzuki-kun (OJAD) accent
-results.
+"""Predefined regex override layer + POS-driven accent patches.
 
-Yahoo's furigana service is context-blind — it gets common date and weekday-
-bracket readings wrong (e.g. "5日" → にち instead of いつか, "(土)" → つち
-instead of ど). We post-process Yahoo's tokenised response with a list of
-`FuriganaOverride` entries: each entry is a regex against the concatenated
-surface text, plus the replacement tokens that should appear instead.
+Two layers run after the local fugashi tokeniser + OJAD alignment:
 
-The same overrides are applied a second time after OJAD alignment, replacing
-both furigana and accent in one go.
+(1) **Regex overrides** — `apply_furigana_overrides` (before OJAD align)
+    and `apply_accent_overrides` (after align). Each entry is a regex
+    against the concatenated surface text plus the replacement tokens
+    that should appear instead. The same overrides are applied a second
+    time after OJAD alignment, replacing both furigana and accent in
+    one go. Patterns accept half-width, full-width, and kanji-numeral
+    variants of the same surface, so "3月5日(土)" / "３月５日（土）" /
+    "三月五日（土）" all trigger the same overrides.
 
-Patterns are written with character classes that accept half-width, full-width,
-and kanji-numeral variants of the same surface, so "3月5日(土)" / "３月５日（土）"
-/ "三月五日（土）" all trigger the same overrides.
+(2) **POS-driven patches** — `apply_accent_patches`, runs after the
+    full-span overrides. Inspects each token's MA-provided POS metadata
+    (`pos`, `pos1`, `base`, `conjugation_form`) and may rewrite its
+    trailing accent without touching the verb stem on the previous
+    token. Currently covers polite ます and desiderative たい.
 
-If a match doesn't fall on Yahoo's token boundaries we log a warning and leave
-the match alone — Yahoo's result passes through unchanged.
+If a regex match doesn't fall on token boundaries we log a warning and
+leave the match alone — the original result passes through unchanged.
 """
 
 from __future__ import annotations
 
 import logging
 import re
-from dataclasses import dataclass
-from typing import Callable, TypeVar
+from dataclasses import dataclass, field
+from typing import Any, Callable, TypeVar
 
 from api.accent.models import AccentInfo, WordAccentResult, WordResult
 
@@ -40,13 +42,13 @@ class ReplacementToken:
     count equals the match length — see _resolve_surface).
 
     `furigana=None` means: echo the resolved surface (useful for non-kana
-    positions like brackets, mirroring Yahoo's own fallback in
-    `api/accent/furigana.py`).
+    positions like brackets, mirroring the tokeniser's own fallback in
+    `tag_local` in `tokenizer.py`).
 
-    `accent` is a per-moji sequence of (kana, accent_marking_type) — 0=none,
-    1=heiban, 2=fall — matching the existing AccentInfo schema. Empty tuple →
-    fall back to a single accent_marking_type=0 entry covering the whole
-    furigana.
+    `accent` is a per-moji sequence of (kana, accent_marking_type) — 0=LOW,
+    1=HIGH plateau, 2=FALL kernel — matching the existing AccentInfo schema.
+    Empty tuple → fall back to a single accent_marking_type=0 entry covering
+    the whole furigana.
     """
 
     furigana: str | None = None
@@ -59,6 +61,13 @@ class FuriganaOverride:
     pattern: re.Pattern[str]
     replacements: tuple[ReplacementToken, ...]
     description: str = ""
+    # When set, the regex match is additionally filtered: only fires if
+    # `pos_match(tokens_in_match_span)` returns True. None preserves the
+    # original surface-only matching used by every existing override. The
+    # span is `list[WordResult]` for furigana overrides, `list[WordAccentResult]`
+    # for accent overrides — both expose the same POS attributes after the
+    # local-tokeniser migration.
+    pos_match: Callable[[list[Any]], bool] | None = field(default=None)
 
 
 # accent_marking_type values (mirror AccentInfo)
@@ -76,9 +85,13 @@ def _moji_seq(text: str, t: int = _HEIBAN) -> tuple[tuple[str, int], ...]:
 
 
 def _atamadaka_seq(text: str) -> tuple[tuple[str, int], ...]:
+    # Atamadaka (頭高): mora 1 carries the FALL kernel, every later mora is
+    # LOW. Marking the tail as _HEIBAN renders a high plateau after the
+    # downstep, which contradicts the pitch contour and looks visually
+    # wrong in strong-mode renderers.
     if not text:
         return ()
-    return ((text[0], _FALL),) + tuple((c, _HEIBAN) for c in text[1:])
+    return ((text[0], _FALL),) + tuple((c, _NONE) for c in text[1:])
 
 
 # Numeric variant helpers: keep N-prefixed patterns (N日, N日間, N歳) from
@@ -130,10 +143,11 @@ def _day_of_week_overrides() -> list[FuriganaOverride]:
         # surface=None on all three lets _resolve_surface inherit per-position
         # from the matched substring, preserving half-width vs full-width
         # brackets in the input. furigana=None on the brackets echoes their
-        # surface (Yahoo also returns the bracket char as its own furigana).
+        # surface (the tokeniser also returns the bracket char as its own
+        # furigana).
         out.append(
             FuriganaOverride(
-                pattern=re.compile(rf"[(（]{kanji}[)）]"),
+                pattern=re.compile(rf"[((]{kanji}[))]"),
                 replacements=(
                     ReplacementToken(),  # left bracket: both inherit
                     ReplacementToken(furigana=reading, accent=_moji_seq(reading)),
@@ -147,11 +161,10 @@ def _day_of_week_overrides() -> list[FuriganaOverride]:
 
 def _date_overrides() -> list[FuriganaOverride]:
     # 1-10日, 14日, 20日, 24日 are irregular (ついたち, ふつか, ..., はつか).
-    # 11-31日 are regular (じゅういちにち etc.) but Yahoo often returns the
-    # literal digits as their own "furigana" for numeric tokens; the accent
-    # endpoint's align_accent also frequently misaligns numeric spans.
-    # Listing every day-of-month here gives both endpoints a deterministic
-    # reading + accent for any date.
+    # 11-31日 are regular (じゅういちにち etc.) but the numeric token's
+    # reading is often the literal digit; align_accent also frequently
+    # misaligns numeric spans. Listing every day-of-month here gives both
+    # endpoints a deterministic reading + accent for any date.
     #
     # Only 1日 (ついたち) is atamadaka — the rest sit in heiban-style.
     readings: list[tuple[int, str, tuple[tuple[str, int], ...]]] = [
@@ -202,8 +215,7 @@ def _date_overrides() -> list[FuriganaOverride]:
 def _duration_overrides() -> list[FuriganaOverride]:
     """N日間 (counter for days as a duration) expansions.
 
-    Yahoo tokenises e.g. `1日間` as [`1`, `日間`] and gives the numeric
-    token no furigana (its result is just the literal digit), so the
+    Bare numeric tokens get no useful reading from the tokeniser, so the
     furigana endpoint surfaces unreadable output like `1にちかん`. We
     override the full N日間 span so the user sees a complete reading.
 
@@ -387,7 +399,7 @@ def _apply(
         end_idx = boundary_to_index.get(m.end)
         if start_idx is None or end_idx is None:
             logger.warning(
-                "Override %r match at [%d, %d) does not align with Yahoo token "
+                "Override %r match at [%d, %d) does not align with token "
                 "boundaries — skipping",
                 m.override.description or m.override.pattern.pattern,
                 m.start,
@@ -397,6 +409,20 @@ def _apply(
         if start_idx < cursor:
             # earlier non-overlapping match already consumed this region
             continue
+        if m.override.pos_match is not None:
+            token_span = list(words[start_idx:end_idx])
+            if not m.override.pos_match(token_span):
+                # POS check rejected — pretend this match never happened.
+                # Earlier-start, lower-priority matches (already filtered
+                # out by _collect_matches) don't get a second chance, but
+                # subsequent non-overlapping matches still do.
+                logger.debug(
+                    "Override %r matched at [%d, %d) but pos_match rejected",
+                    m.override.description or m.override.pattern.pattern,
+                    m.start,
+                    m.end,
+                )
+                continue
         while cursor < start_idx:
             out.append(words[cursor])
             cursor += 1
@@ -416,7 +442,7 @@ def _resolve_furigana(rt: ReplacementToken, surface: str) -> str:
 
 
 def apply_furigana_overrides(words: list[WordResult]) -> list[WordResult]:
-    """Post-process Yahoo Furigana results, replacing matched spans."""
+    """Post-process tokeniser results, replacing matched spans."""
 
     def build(
         repls: tuple[ReplacementToken, ...], pos: int, matched: str
@@ -455,3 +481,136 @@ def apply_accent_overrides(
         return WordAccentResult(surface=surface, furigana=furigana, accent=accent)
 
     return _apply(words, lambda w: w.surface, build)
+
+
+# ---------- POS-driven in-place accent patches ----------
+#
+# Distinct from `apply_accent_overrides` above (which does full-span
+# replacement). Each rule inspects a single token's MA-provided POS metadata
+# (`pos`, `pos1`, `base`, `conjugation_form`) and may rewrite its trailing
+# accent — without touching the verb stem on the previous token.
+#
+# Rules are defined as functions to `WordAccentResult → WordAccentResult |
+# None`. Returning None means "no change"; returning a new object swaps the
+# token in place. The patch pipeline is small enough that we don't bother
+# with a generic rule-table indirection.
+
+
+# Empty initial set — the Phase 1 spike found zero false-positive cases
+# where MA mis-tags a 五段動詞 as 接尾辞. Populate as real cases arrive.
+_PATCH_EXCEPTIONS: frozenset[str] = frozenset()
+
+
+# Conjugation forms where the first-mora FALL rule applies. Polite ます
+# behaves like an atamadaka 2-mora foot in 終止形 (ます → ま↓す) and in
+# 連用形 (まし[た] → ま↓し-た). It does NOT apply in 未然形 — in ません,
+# the kernel falls on せ before the final ん, not on ま. OJAD already
+# predicts ません correctly, and our patch would un-fix it.
+_FIRST_MORA_FALL_FORMS = ("終止形", "連用形")
+
+
+def _patches_first_mora(conjugation_form: str | None) -> bool:
+    if not conjugation_form:
+        return False
+    return any(conjugation_form.startswith(p) for p in _FIRST_MORA_FALL_FORMS)
+
+
+def _is_masu_auxiliary(token: WordAccentResult) -> bool:
+    """Self-check: pos × conjugation_type × base × surface × conjugation_form.
+
+    UniDic tags polite-form ます as pos=助動詞 with
+    conjugation_type=助動詞-マス and base=ます (regardless of which
+    conjugated form: ます / まし / ませ all share base=ます). The
+    conjugation_form check narrows the patch to forms where the kernel
+    really is on the first mora — see `_FIRST_MORA_FALL_FORMS` above.
+
+    Failure modes filtered out:
+    - 五段動詞 励ます: pos=動詞 → fails first axis.
+    - UniDic-mistagged 升 (surname, reading=ます): surface=升 (kanji)
+      doesn't start with ま → fails surface prefix.
+    - ませ in ません (cform=未然形-一般): rejected by _patches_first_mora.
+    """
+    if token.surface in _PATCH_EXCEPTIONS:
+        return False
+    return (
+        token.pos == "助動詞"
+        and token.conjugation_type == "助動詞-マス"
+        and token.base == "ます"
+        and token.surface.startswith("ま")
+        and token.furigana.startswith("ま")
+        and _patches_first_mora(token.conjugation_form)
+    )
+
+
+def _is_tai_auxiliary(token: WordAccentResult) -> bool:
+    """Self-check for the desiderative たい suffix.
+
+    UniDic tags たい / たく / たかった with pos=助動詞,
+    conjugation_type=助動詞-タイ, base=たい. All known conjugations have
+    the kernel on the first mora (た), so the conjugation_form gate
+    accepts all 終止形 / 連用形 variants.
+    """
+    if token.surface in _PATCH_EXCEPTIONS:
+        return False
+    return (
+        token.pos == "助動詞"
+        and token.conjugation_type == "助動詞-タイ"
+        and token.base == "たい"
+        and token.surface.startswith("た")
+        and token.furigana.startswith("た")
+        and _patches_first_mora(token.conjugation_form)
+    )
+
+
+def _patch_first_mora_fall(token: WordAccentResult) -> WordAccentResult:
+    """Return a copy of `token` with accent[0]=FALL, accent[1:]=LOW.
+
+    Mirrors the rule "for ます/たい-family suffixes the accent kernel sits
+    on the first mora": the high pitch of the verb stem drops as soon as
+    the suffix begins, and the rest of the suffix stays low. Post-FALL
+    morae must be LOW (_NONE), not HEIBAN — _HEIBAN renders as a high
+    plateau after the downstep, which conflicts with the actual pitch
+    contour.
+    """
+    if not token.accent:
+        return token
+    new_accent: list[AccentInfo] = []
+    for i, a in enumerate(token.accent):
+        marking = _FALL if i == 0 else _NONE
+        new_accent.append(
+            AccentInfo(
+                furigana=a.furigana,
+                accent_marking_type=marking,
+                length=a.length,
+            )
+        )
+    return WordAccentResult(
+        surface=token.surface,
+        furigana=token.furigana,
+        accent=new_accent,
+        subword=token.subword,
+        base=token.base,
+        pos=token.pos,
+        pos1=token.pos1,
+        conjugation_type=token.conjugation_type,
+        conjugation_form=token.conjugation_form,
+    )
+
+
+def apply_accent_patches(
+    words: list[WordAccentResult],
+) -> list[WordAccentResult]:
+    """POS-driven in-place accent patches on aligned MA tokens.
+
+    Idempotent — applying the same patch twice yields the same output. Safe
+    to run after `apply_accent_overrides`: tokens that were entirely
+    replaced by an override have `pos=None`/`base=None` and the self-check
+    predicates therefore reject them.
+    """
+    out: list[WordAccentResult] = []
+    for token in words:
+        if _is_masu_auxiliary(token) or _is_tai_auxiliary(token):
+            out.append(_patch_first_mora_fall(token))
+        else:
+            out.append(token)
+    return out
