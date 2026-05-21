@@ -244,6 +244,38 @@ def restore_x_between_digits(
     return out
 
 
+# `.` between an ASCII letter and an alphanumeric (or between alphanumeric
+# and an ASCII letter) — i.e. `Wifi.7`, `iPhone.7`, `i.e`. OJAD silently
+# normalises these `.`s to full-width `。` (`Wifi.7` → echoed as `Wifi。7`)
+# and the prosody CRF then collapses pitch accents on everything after
+# that point (`といった技術` came back all-zero, the user-reported
+# "音調不見了" symptom). We strip the `.` from OJAD's query so the CRF
+# sees a clean `Wifi7` and produces a normal contour for the rest of
+# the sentence; fugashi still sees the original surface, so the
+# tokenizer's acronym-merge step keeps the user-visible `Wifi.7`.
+#
+# Digit-flanked `.` is deliberately NOT stripped: `2.5` and `192.168.1.1`
+# don't trigger OJAD's `.` → `。` normalisation (the CRF stays sane),
+# and stripping would change the spoken reading from "two point five"
+# to "twenty five".
+_OJAD_ACRONYM_DOT_RE = re.compile(
+    r"(?<=[A-Za-z])\.(?=[A-Za-z0-9])|(?<=[A-Za-z0-9])\.(?=[A-Za-z])"
+)
+
+
+def strip_acronym_dots_for_ojad(text: str) -> str:
+    """Remove `.` between alpha+alphanumeric pairs in the OJAD query.
+
+    Asymmetric strip (no restore): only the OJAD-side text loses the
+    `.`. fugashi continues to see the original so its tokenization +
+    the tokenizer's acronym-merge keep the user-visible `Wifi.7`
+    surface intact. The aligner's english-compound branch is permissive
+    enough to align the merged token against OJAD's `Wifi7` reading
+    without further accommodation.
+    """
+    return _OJAD_ACRONYM_DOT_RE.sub("", text)
+
+
 # Sentence terminators that close a Japanese clause: kuten (。), full-width
 # question (？), full-width exclamation (！), and full-width period (．).
 # ASCII `.!?` are intentionally excluded — they appear in abbreviations,
@@ -343,6 +375,7 @@ __all__ = [
     "restore_urls",
     "restore_x_between_digits",
     "split_sentences",
+    "strip_acronym_dots_for_ojad",
     "strip_number_commas",
     "strip_urls",
     "strip_x_between_digits",
