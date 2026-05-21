@@ -49,9 +49,7 @@ async def mark_furigana(
     return await fetch_furigana(request.text, client)
 
 
-@accent_router.post(
-    "/MarkAccent/", tags=["MarkAccent"], response_model=AccentResponse
-)
+@accent_router.post("/MarkAccent/", tags=["MarkAccent"], response_model=AccentResponse)
 async def mark_accent(
     request: Request,
     client: httpx.AsyncClient = Depends(get_http_client),

@@ -85,12 +85,8 @@ async def get_api_key(api_key: str = Security(api_key_header)) -> None:
 
 
 # Include routers from different modules
-app.include_router(
-    accent_router, prefix="/api", dependencies=[Depends(get_api_key)]
-)
-app.include_router(
-    furigana_router, prefix="/api", dependencies=[Depends(get_api_key)]
-)
+app.include_router(accent_router, prefix="/api", dependencies=[Depends(get_api_key)])
+app.include_router(furigana_router, prefix="/api", dependencies=[Depends(get_api_key)])
 app.include_router(
     usage_query.router, prefix="/api", dependencies=[Depends(get_api_key)]
 )

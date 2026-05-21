@@ -23,9 +23,7 @@ from api.accent.ojad import get_ojad_result
 logger = logging.getLogger("api")
 
 
-async def process_accent_chunk(
-    text: str, client: httpx.AsyncClient
-) -> AccentResponse:
+async def process_accent_chunk(text: str, client: httpx.AsyncClient) -> AccentResponse:
     """Run the full MarkAccent pipeline on a single chunk of text."""
     try:
         query_text = neologdn.normalize(text, tilde="normalize")

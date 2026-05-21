@@ -16,9 +16,7 @@ from config.settings import YAHOO_API_KEY
 YAHOO_FURIGANA_URL = "https://jlp.yahooapis.jp/FuriganaService/V2/furigana"
 
 
-async def fetch_furigana(
-    text: str, client: httpx.AsyncClient
-) -> FuriganaResponse:
+async def fetch_furigana(text: str, client: httpx.AsyncClient) -> FuriganaResponse:
     """POST `text` to Yahoo Furigana and return a parsed FuriganaResponse.
 
     Non-200 upstream / timeout / malformed-payload all return a
