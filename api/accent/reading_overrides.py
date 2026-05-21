@@ -29,6 +29,7 @@ from dataclasses import dataclass, field
 from typing import Any, Callable, TypeVar
 
 from api.accent.models import AccentInfo, WordAccentResult, WordResult
+from api.accent.user_patches import USER_PATCHES
 
 logger = logging.getLogger("api")
 
@@ -82,6 +83,30 @@ _NOT_NUM_AHEAD = rf"(?![{_DIGIT_CLASS}])"
 
 def _moji_seq(text: str, t: int = _HEIBAN) -> tuple[tuple[str, int], ...]:
     return tuple((c, t) for c in text)
+
+
+# Small kana that attach to the preceding mora (so じゅ counts as one
+# mora rather than じ + ゅ). Both hiragana and katakana variants are
+# included so the splitter works regardless of script.
+_SMALL_KANA = frozenset("ャュョァィゥェォヮゎぁぃぅぇぉゃゅょ")
+
+
+def _mora_seq(text: str, t: int = _HEIBAN) -> tuple[tuple[str, int], ...]:
+    """Split `text` into Japanese morae and emit an accent entry per mora.
+
+    Used by patches whose furigana contains 拗音 — `_moji_seq` would
+    split `じゅ` into two entries `(じ, t)` `(ゅ, t)`, breaking client-
+    side mora counts. `_mora_seq("さんじゅう")` → `(さ,t)(ん,t)(じゅ,t)(う,t)`.
+    """
+    if not text:
+        return ()
+    morae: list[str] = []
+    for c in text:
+        if c in _SMALL_KANA and morae:
+            morae[-1] += c
+        else:
+            morae.append(c)
+    return tuple((m, t) for m in morae)
 
 
 def _atamadaka_seq(text: str) -> tuple[tuple[str, int], ...]:
@@ -291,15 +316,56 @@ def _age_overrides() -> list[FuriganaOverride]:
     ]
 
 
+def _user_patch_overrides() -> list[FuriganaOverride]:
+    """Compile `user_patches.USER_PATCHES` into FuriganaOverride entries.
+
+    Each dict value is `((segment_surface, segment_furigana), ...)`;
+    the segment surfaces must concatenate to the key. Heiban accent
+    is assumed for the whole reading — patches needing fancier accent
+    contours should be written as full FuriganaOverride entries here
+    instead of going through this helper.
+    """
+    out: list[FuriganaOverride] = []
+    for literal_text, segments in USER_PATCHES.items():
+        seg_sum = sum(len(s) for s, _ in segments)
+        if seg_sum != len(literal_text):
+            logger.warning(
+                "USER_PATCHES[%r]: segment surfaces sum to %d chars but key "
+                "is %d chars — skipping (boundary mismatch will not apply).",
+                literal_text,
+                seg_sum,
+                len(literal_text),
+            )
+            continue
+        out.append(
+            FuriganaOverride(
+                pattern=re.compile(re.escape(literal_text)),
+                replacements=tuple(
+                    ReplacementToken(
+                        surface=surf,
+                        furigana=furi,
+                        accent=_mora_seq(furi),
+                    )
+                    for surf, furi in segments
+                ),
+                description=f"user patch: {literal_text}",
+            )
+        )
+    return out
+
+
 # Order matters: _collect_matches breaks ties on (start, -length) and
 # discards anything overlapping an earlier pick. `N日間` (3-4 chars) is
 # strictly longer than `N日` at the same start, so duration entries
 # automatically win over date entries for the same N when 間 follows.
+# User patches go last so they can override the built-in date/duration
+# entries when the user explicitly lists an overlapping key.
 OVERRIDES: list[FuriganaOverride] = (
     _day_of_week_overrides()
     + _duration_overrides()
     + _date_overrides()
     + _age_overrides()
+    + _user_patch_overrides()
 )
 
 
