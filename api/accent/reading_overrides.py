@@ -91,6 +91,19 @@ def _moji_seq(text: str, t: int = _HEIBAN) -> tuple[tuple[str, int], ...]:
 _SMALL_KANA = frozenset("ャュョァィゥェォヮゎぁぃぅぇぉゃゅょ")
 
 
+def _split_morae(text: str) -> list[str]:
+    """Split a kana string into Japanese morae (small kana attach left)."""
+    if not text:
+        return []
+    morae: list[str] = []
+    for c in text:
+        if c in _SMALL_KANA and morae:
+            morae[-1] += c
+        else:
+            morae.append(c)
+    return morae
+
+
 def _mora_seq(text: str, t: int = _HEIBAN) -> tuple[tuple[str, int], ...]:
     """Split `text` into Japanese morae and emit an accent entry per mora.
 
@@ -98,15 +111,48 @@ def _mora_seq(text: str, t: int = _HEIBAN) -> tuple[tuple[str, int], ...]:
     split `じゅ` into two entries `(じ, t)` `(ゅ, t)`, breaking client-
     side mora counts. `_mora_seq("さんじゅう")` → `(さ,t)(ん,t)(じゅ,t)(う,t)`.
     """
-    if not text:
+    return tuple((m, t) for m in _split_morae(text))
+
+
+def _accent_from_spec(furi: str, spec: Any) -> tuple[tuple[str, int], ...]:
+    """Build an accent tuple from a USER_PATCHES `accent_spec`.
+
+    `spec` accepts:
+      - None / `"heiban"`  — every mora HIGH (default)
+      - `"atamadaka"`      — first mora FALL, rest LOW
+      - `"low"`            — every mora LOW
+      - tuple of ints      — explicit per-mora type (0=LOW / 1=HIGH /
+                             2=FALL); length must match the mora count
+                             of `furi` or the patch falls back to heiban
+                             with a warning.
+    Any other value warns and falls back to heiban.
+    """
+    morae = _split_morae(furi)
+    if not morae:
         return ()
-    morae: list[str] = []
-    for c in text:
-        if c in _SMALL_KANA and morae:
-            morae[-1] += c
-        else:
-            morae.append(c)
-    return tuple((m, t) for m in morae)
+    if spec is None or spec == "heiban":
+        return tuple((m, _HEIBAN) for m in morae)
+    if spec == "atamadaka":
+        return ((morae[0], _FALL),) + tuple((m, _NONE) for m in morae[1:])
+    if spec == "low":
+        return tuple((m, _NONE) for m in morae)
+    if isinstance(spec, tuple) and all(isinstance(x, int) for x in spec):
+        if len(spec) != len(morae):
+            logger.warning(
+                "user patch accent_spec length %d != mora count %d for %r; "
+                "falling back to heiban.",
+                len(spec),
+                len(morae),
+                furi,
+            )
+            return tuple((m, _HEIBAN) for m in morae)
+        return tuple((m, t) for m, t in zip(morae, spec))
+    logger.warning(
+        "unknown user patch accent_spec %r for %r; falling back to heiban.",
+        spec,
+        furi,
+    )
+    return tuple((m, _HEIBAN) for m in morae)
 
 
 def _atamadaka_seq(text: str) -> tuple[tuple[str, int], ...]:
@@ -327,7 +373,26 @@ def _user_patch_overrides() -> list[FuriganaOverride]:
     """
     out: list[FuriganaOverride] = []
     for literal_text, segments in USER_PATCHES.items():
-        seg_sum = sum(len(s) for s, _ in segments)
+        # Each segment is (surf, furi) or (surf, furi, accent_spec).
+        parsed: list[tuple[str, str, Any]] = []
+        bad = False
+        for seg in segments:
+            if len(seg) == 2:
+                parsed.append((seg[0], seg[1], None))
+            elif len(seg) == 3:
+                parsed.append((seg[0], seg[1], seg[2]))
+            else:
+                logger.warning(
+                    "USER_PATCHES[%r]: segment %r is not a 2- or 3-tuple — "
+                    "skipping entry.",
+                    literal_text,
+                    seg,
+                )
+                bad = True
+                break
+        if bad:
+            continue
+        seg_sum = sum(len(s) for s, _, _ in parsed)
         if seg_sum != len(literal_text):
             logger.warning(
                 "USER_PATCHES[%r]: segment surfaces sum to %d chars but key "
@@ -344,9 +409,9 @@ def _user_patch_overrides() -> list[FuriganaOverride]:
                     ReplacementToken(
                         surface=surf,
                         furigana=furi,
-                        accent=_mora_seq(furi),
+                        accent=_accent_from_spec(furi, spec),
                     )
-                    for surf, furi in segments
+                    for surf, furi, spec in parsed
                 ),
                 description=f"user patch: {literal_text}",
             )
