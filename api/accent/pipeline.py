@@ -4,22 +4,25 @@ Threads the layers together:
 
   1. `preprocess.strip_urls / strip_number_commas / strip_x_between_digits`
      — pre-tokenisation surface rewrites with bookkeeping for restoration.
-  2. `tokenizer.tag_local` — fugashi + UniDic in-process tokenisation.
-  3. `preprocess.merge_readable_symbol_compounds` — glue `2%` style spans
-     so OJAD's multi-mora reading lands cleanly.
-  4. `reading_overrides.apply_furigana_overrides` — regex date/duration
+  2. `tokenizer.tag_local` — fugashi + UniDic in-process tokenisation
+     (also fills in furigana for standalone symbols `#`, `%`, … via
+     `preprocess.SYMBOL_READINGS`, so digits and symbols stay separate
+     tokens with the symbol's reading anchored to itself).
+  3. `reading_overrides.apply_furigana_overrides` — regex date/duration
      overrides applied before OJAD so OJAD sees normalised surfaces.
-  5. `ojad.get_ojad_result` — per-mora pitch contour from OJAD.
-  6. `align.align_accent` — DP align tokens ↔ OJAD spans → WordAccentResult.
-  7. `reading_overrides.apply_accent_overrides` — re-run the same regex
+  4. `ojad.get_ojad_result` — per-mora pitch contour from OJAD.
+  5. `align.align_accent` — DP align tokens ↔ OJAD spans → WordAccentResult.
+  6. `reading_overrides.apply_accent_overrides` — re-run the same regex
      overrides on aligned results to rewrite furigana + accent in one go.
-  8. `reading_overrides.apply_accent_patches` — POS-driven ます / たい
+  7. `reading_overrides.apply_accent_patches` — POS-driven ます / たい
      first-mora-FALL patches.
-  9. `postprocess.flatten_heiban_particle_accent / suppress_punct_furigana
-     / apply_furigana_toggles / suppress_particle_furigana` — rendering
-     polish (see `postprocess.py`).
- 10. `preprocess.restore_number_commas / restore_x_between_digits /
+  8. `postprocess.flatten_heiban_particle_accent / suppress_punct_furigana
+     / apply_furigana_toggles / suppress_particle_furigana /
+     split_okurigana` — rendering polish (see `postprocess.py`).
+  9. `preprocess.restore_number_commas / restore_x_between_digits /
      restore_urls` — undo the pre-tokenisation surface rewrites.
+ 10. `postprocess.convert_furigana_script` — last pass, rewrites every
+     furigana field into the requested output script.
 
 `_build_chunks` + `_schedule_chunks` are shared between the regular
 `/MarkAccent/` (collected) and `/MarkAccent/stream/` (yielded) endpoints
@@ -48,7 +51,6 @@ from api.accent.postprocess import (
 )
 from api.accent.preprocess import (
     has_japanese,
-    merge_readable_symbol_compounds,
     restore_number_commas,
     restore_urls,
     restore_x_between_digits,
@@ -124,7 +126,6 @@ async def process_accent_chunk(
         # otherwise cascades-fails on these inputs because numeric tokens lack
         # any furigana for OJAD to align against.
         raw = tag_local(stripped_text)
-        raw = merge_readable_symbol_compounds(raw)
         furigana_results = apply_furigana_overrides(raw)
         if not furigana_results:
             logger.warning("Local tokeniser returned empty token list")
