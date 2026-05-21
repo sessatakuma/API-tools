@@ -1,29 +1,37 @@
-"""Align Yahoo Furigana tokens with OJAD per-mora accent entries.
+"""Align local-tokeniser tokens with OJAD per-mora accent entries.
 
-`align_accent()` builds a Needleman-Wunsch-style DP over
-(yahoo_token, ojad_entry) pairs: for every Yahoo token we consider letting
-it consume k contiguous OJAD entries (k ∈ [0, K_MAX]), with the per-token
-cost depending on token shape (punct / numeric / kana) and edit distance
-over rendaku-folded strings for kana tokens. This replaces the older
-greedy aligner whose +1 fallback path cascaded a single mismatch into
-type-0 fallback for every downstream token.
+The DP aligner replaces an earlier greedy implementation that had two fatal
+failure modes: a numeric anchor that over-consumed when the tokeniser and
+OJAD disagreed on a phrase boundary, and a fallback path that advanced
+OJAD by exactly +1 — so a single mismatch cascaded into type-0 fallback
+for every downstream token.
 
-Alignment itself uses `numeric_pattern` and `is_kana_or_kanji`. The
-adjacent `punctuation_marks`, `skip_marks`, and `clean_query` are
-carried over from the pre-refactor module as part of the accent
-domain vocabulary and are kept here for downstream PRs (see #47).
+`align_accent()` builds a Needleman-Wunsch-style DP over (token, ojad_entry)
+pairs. Each cell `dp[i][j]` holds the minimum total cost to explain tokens
+[0..i) using OJAD entries [0..j). For every (i, j) we try consuming k OJAD
+entries for token i with k ∈ [0, _K_MAX]; the per-token cost depends on
+token shape (punctuation / numeric / readable-symbol compound / kana) and
+uses edit distance over rendaku-folded strings for kana tokens. A bad
+token costs O(1); downstream tokens stay aligned.
+
+This module also owns the per-token classification predicates and the
+edit-distance / voicing-fold tables they depend on.
 """
 
 from __future__ import annotations
 
 import logging
-import re
 import string
 from typing import Any
 
 import jaconv
 
 from api.accent.models import AccentInfo, WordAccentResult, WordResult
+from api.accent.preprocess import (
+    NUMERIC_PATTERN,
+    READABLE_COMPOUND_RE,
+    READABLE_SYMBOLS,
+)
 
 logger = logging.getLogger("api")
 
@@ -43,11 +51,8 @@ punctuation_marks = set(
         "』",
         "（",
         "）",
-        "—",
         "、、、",
-        "、",
         "————",
-        "—",
         "？",
         "！",
         ".",
@@ -63,7 +68,6 @@ punctuation_marks = set(
         "/",
         ":",
         ";",
-        "！",
         "＂",
         "＃",
         "＄",
@@ -71,23 +75,16 @@ punctuation_marks = set(
         "＆",
         "＼",
         "’",
-        "（",
-        "）",
         "＊",
         "＋",
-        "，",
         "－",
         "．",
         "／",
-        "：",
-        "；",
         "＜",
         "＝",
         "＞",
-        "？",
         "＠",
         "［",
-        "＼",
         "］",
         "︿",
         "＿",
@@ -101,9 +98,6 @@ punctuation_marks = set(
     ]
 ).union(set(string.punctuation))
 skip_marks = set(string.ascii_lowercase + string.ascii_uppercase)
-
-# accept negative integers and decimals
-numeric_pattern = re.compile(r"^-?\d+(\.\d+)?$")
 
 
 def clean_query(query: str) -> str:
@@ -120,7 +114,6 @@ def is_kana_or_kanji(char: Any) -> bool:
     """Check whether given character is kana or kanji (ignore half-width kana)."""
     exception_symbols = ["゠", "・", "ー", "ヽ", "ヾ", "ヿ"]
     if char in exception_symbols:
-        # '゠', '・', 'ー', 'ヽ', 'ヾ', 'ヿ' which should be regarded as punctuation
         return False
     kana = range(0x3040, 0x30FF + 1)
     kanji = range(0x4E00, 0x9FFF + 1)
@@ -129,12 +122,13 @@ def is_kana_or_kanji(char: Any) -> bool:
     return False
 
 
-# Yahoo returns "dictionary form" furigana (no rendaku), while OJAD returns the
-# actually pronounced kana (with rendaku/sequential-voicing applied). When
-# Yahoo says "ふんかん" and OJAD says "ぷんかん", literal startswith / equality
-# checks would never match and the alignment would cascade-fail. We compare
-# under a normalisation that folds each voiced/half-voiced kana to its
-# voiceless base, so ぷ↔ふ, ば↔は, ご↔こ etc. all alias together.
+# Local tokeniser returns "dictionary form" furigana (no rendaku), while OJAD
+# returns the actually pronounced kana (with rendaku/sequential-voicing
+# applied). When the tokeniser says "ふんかん" and OJAD says "ぷんかん", the
+# literal startswith / equality checks would never match and the alignment
+# would cascade-fail. We compare under a normalisation that folds each
+# voiced/half-voiced kana to its voiceless base, so ぷ↔ふ, ば↔は, ご↔こ etc.
+# all alias together.
 _VOICING_FOLD: dict[str, str] = {
     "が": "か", "ぎ": "き", "ぐ": "く", "げ": "け", "ご": "こ",
     "ざ": "さ", "じ": "し", "ず": "す", "ぜ": "せ", "ぞ": "そ",
@@ -150,22 +144,9 @@ def _norm(s: str) -> str:
     return "".join(_VOICING_FOLD.get(c, c) for c in hira)
 
 
-# --- DP aligner ----------------------------------------------------------------
-#
-# The greedy aligner this replaced had two fatal failure modes: a numeric
-# anchor that over-consumed when Yahoo and OJAD disagreed on a phrase
-# boundary, and a fallback path that advanced OJAD by exactly +1 — so a
-# single mismatch cascaded into type-0 fallback for every downstream token.
-#
-# Instead we now build a Needleman-Wunsch-style DP over (yahoo_token,
-# ojad_entry) pairs. Each cell dp[i][j] holds the minimum total cost to
-# explain Yahoo tokens [0..i) using OJAD entries [0..j). For every (i, j)
-# we try consuming k OJAD entries for token i with k ∈ [0, K_MAX]; the
-# per-token cost depends on token shape (punctuation / numeric / kana) and
-# uses edit distance over rendaku-folded strings for kana tokens. A bad
-# token costs O(1); downstream tokens stay aligned.
+# --- DP aligner constants ------------------------------------------------------
 
-_K_MAX = 16  # max OJAD entries one Yahoo token can consume
+_K_MAX = 16  # max OJAD entries one token can consume
 _INF = float("inf")
 _FALLBACK_COST = 3.0  # cost of giving up on a single token (k=0 for kana/numeric)
 _OJAD_PUNCT_TEXTS = {"、", "。", ",", ".", "?", "!", "！", "？"}
@@ -210,11 +191,29 @@ def _edit_distance(a: str, b: str) -> float:
 def _is_punct_token(furigana: str, is_numeric: bool) -> bool:
     if is_numeric or not furigana:
         return False
+    # Readable symbols (%, ℃ …) syntactically look like punctuation but
+    # carry spoken readings — they're handled by the readable-compound
+    # path, not the punct DP branch.
+    if all(c in READABLE_SYMBOLS for c in furigana):
+        return False
+    # ASCII-letter tokens (e.g. `iPhone`, `Apple` UniDic doesn't recognise)
+    # are foreign words, not punctuation. Without this guard they'd be
+    # classified as punct, the DP would refuse their OJAD morae, and
+    # those morae would leak onto neighboring tokens. They should flow
+    # through the kana path (cost via edit_distance against the OJAD
+    # span) so the morae stay anchored — `_apply_furigana_toggles` then
+    # wipes them at request time if `render_english_furigana` is False.
+    if any("a" <= c <= "z" or "A" <= c <= "Z" for c in furigana):
+        return False
     return all(not is_kana_or_kanji(c) for c in furigana)
 
 
 def _match_cost(
-    token: Any, span_texts: list[str], is_numeric: bool, is_punct: bool
+    token: WordResult,
+    span_texts: list[str],
+    is_numeric: bool,
+    is_punct: bool,
+    is_readable_compound: bool = False,
 ) -> float:
     """Cost of letting `token` consume the given OJAD-text span."""
     k = len(span_texts)
@@ -237,51 +236,131 @@ def _match_cost(
                 return 0.0
         return _INF
 
+    # Beyond this point the token wants OJAD morae as its reading.
+    # OJAD's punct entries (、 。 , . ! ?) carry no spoken kana and must
+    # never bleed into a non-punct token — without this guard `、`
+    # leaks onto the next numeric / kana token's accent list (the
+    # 「2001|、|0」 symptom from the 量的緩和 paragraph).
+    if any(t in _OJAD_PUNCT_TEXTS for t in span_texts):
+        return _INF
+
+    if is_readable_compound:
+        # Surface is `\d+%` or similar; OJAD pronounces the whole thing
+        # as one phrase whose mora count depends on the digit reading
+        # plus the symbol's kana. We have no kana to compare against,
+        # so accept any plausibly-sized span at cost 0 and only punish
+        # blatantly long ones.
+        if k == 0:
+            return _FALLBACK_COST
+        # Loose upper: per-digit ratio (max 4) + 8 morae of symbol kana.
+        upper = max(4, len(token.surface) * 4) + 8
+        return 0.0 if k <= upper else float(k - upper)
+
     if is_numeric:
         if k == 0:
             return _FALLBACK_COST
-        # Numerics have no Yahoo furigana to compare against. Accept any
+        # Numerics have no token furigana to compare against. Accept any
         # reasonable count of morae; only penalise blatantly over-long spans.
         upper = max(4, len(token.surface) * 4)
-        return 0.0 if k <= upper else float(k - upper)
+        if k > upper:
+            return float(k - upper)
+        # Tiebreaker: empty OJAD entries are phrase-break markers
+        # (notably the ones our preprocessing inserts when swapping
+        # `\d×\d` → `\d/\d`). They should be absorbed by the adjacent
+        # punct token, not stranded inside a numeric span — without
+        # this nudge the DP can split `19×19` into 1-mora-then-7-mora
+        # since every k in [1, upper] has cost 0. The penalty is tiny
+        # (well below kana _SUB_COST=0.4) so it only breaks ties.
+        empty_in_span = sum(1 for t in span_texts if not t)
+        return 0.01 * empty_in_span
 
-    # Kana / kanji token: compare under rendaku fold.
+    # Kana / kanji token: compare under rendaku fold. The OJAD-punct
+    # guard above already kicks in for any non-punct token, so by the
+    # time we reach the kana branch the span is guaranteed punct-free.
     if k == 0:
         return _FALLBACK_COST
     y_norm = _norm(token.furigana)
     o_norm = _norm(concat)
     # Cheap length pre-filter — keeps the DP fast and prevents pathological
-    # "consume 12 OJAD entries to match a 2-mora Yahoo token" alignments.
+    # "consume 12 OJAD entries to match a 2-mora token" alignments.
     if abs(len(y_norm) - len(o_norm)) > 3:
         return _INF
     return _edit_distance(y_norm, o_norm)
 
 
-def _build_word_result(token: Any, ojad_span: list[dict[str, Any]]) -> WordAccentResult:
+def _build_word_result(
+    token: WordResult, ojad_span: list[dict[str, Any]]
+) -> WordAccentResult:
     """Wrap an aligned (token, OJAD-span) pair into a WordAccentResult."""
-    yahoo_surface = token.surface
-    yahoo_furigana = token.furigana
-    is_numeric = bool(numeric_pattern.match(yahoo_surface))
+    token_surface = token.surface
+    token_furigana = token.furigana
+    is_numeric = bool(NUMERIC_PATTERN.match(token_surface))
+    is_readable_compound = bool(READABLE_COMPOUND_RE.match(token_surface))
     subword = (
         [WordResult(furigana=s.furigana, surface=s.surface) for s in token.subword]
         if token.subword
         else []
     )
+    # Carry tokeniser metadata through alignment so downstream patches can
+    # branch on it. Tokens constructed by override replacements (no MA
+    # backing) will have these as None — that's fine.
+    lexical_kernel = getattr(token, "lexical_kernel", None)
+    lexical_kernel_alts = getattr(token, "lexical_kernel_alts", None)
+    base = getattr(token, "base", None)
+    pos = getattr(token, "pos", None)
+    pos1 = getattr(token, "pos1", None)
+    conjugation_type = getattr(token, "conjugation_type", None)
+    conjugation_form = getattr(token, "conjugation_form", None)
+
+    # Pure-punctuation tokens (`「`, `」`, `、`, `!`, `?` …) carry no reading.
+    # Echoing the surface as furigana made clients render ruby on top of
+    # the punctuation char itself, which looks wrong. Emit an empty
+    # furigana + empty accent — the same "skip ruby" signal used by
+    # `restore_urls`. Readable compounds (`2%`) skip this exit because
+    # their `furigana` mirrors the surface (e.g. "2%") and would
+    # otherwise look like punct here — the OJAD-driven path below
+    # rewrites them to the spoken reading.
+    if not is_readable_compound and _is_punct_token(token_furigana, is_numeric):
+        return WordAccentResult(
+            surface=token_surface,
+            furigana="",
+            accent=[],
+            subword=subword,
+            base=base,
+            pos=pos,
+            pos1=pos1,
+            conjugation_type=conjugation_type,
+            conjugation_form=conjugation_form,
+            lexical_kernel=lexical_kernel,
+            lexical_kernel_alts=lexical_kernel_alts,
+        )
+
+    # Fallback accent payload for paths with no usable OJAD info. Single
+    # type-0 entry covering the whole token so downstream overrides and
+    # callers still see one AccentInfo per token.
+    fallback_accent = [
+        AccentInfo(
+            furigana=token_furigana,
+            accent_marking_type=0,
+            length=len(token_furigana),
+        )
+    ]
 
     if not ojad_span:
-        # k=0 path: emit type-0 fallback so the downstream override pass and
-        # callers still see one AccentInfo per token.
+        # k=0 path. `kernel_absorbed` stays False — no OJAD span means
+        # "no OJAD info", not "OJAD absorbed the kernel".
         return WordAccentResult(
-            surface=yahoo_surface,
-            furigana=yahoo_furigana,
-            accent=[
-                AccentInfo(
-                    furigana=yahoo_furigana,
-                    accent_marking_type=0,
-                    length=len(yahoo_furigana),
-                )
-            ],
+            surface=token_surface,
+            furigana=token_furigana,
+            accent=fallback_accent,
             subword=subword,
+            base=base,
+            pos=pos,
+            pos1=pos1,
+            conjugation_type=conjugation_type,
+            conjugation_form=conjugation_form,
+            lexical_kernel=lexical_kernel,
+            lexical_kernel_alts=lexical_kernel_alts,
         )
 
     # Drop OJAD entries with empty text (phrase-boundary sentinels). They
@@ -289,16 +368,17 @@ def _build_word_result(token: Any, ojad_span: list[dict[str, Any]]) -> WordAccen
     voiced_span = [e for e in ojad_span if e["text"]]
     if not voiced_span:
         return WordAccentResult(
-            surface=yahoo_surface,
-            furigana=yahoo_furigana,
-            accent=[
-                AccentInfo(
-                    furigana=yahoo_furigana,
-                    accent_marking_type=0,
-                    length=len(yahoo_furigana),
-                )
-            ],
+            surface=token_surface,
+            furigana=token_furigana,
+            accent=fallback_accent,
             subword=subword,
+            base=base,
+            pos=pos,
+            pos1=pos1,
+            conjugation_type=conjugation_type,
+            conjugation_form=conjugation_form,
+            lexical_kernel=lexical_kernel,
+            lexical_kernel_alts=lexical_kernel_alts,
         )
     accents = [
         AccentInfo(
@@ -308,26 +388,49 @@ def _build_word_result(token: Any, ojad_span: list[dict[str, Any]]) -> WordAccen
         )
         for e in voiced_span
     ]
-    # Numerics had no Yahoo furigana to begin with — surface the OJAD reading.
-    display = "".join(e["text"] for e in voiced_span) if is_numeric else yahoo_furigana
+    # `kernel_absorbed`: UniDic says this word has a kernel (lexical_kernel
+    # >= 1) but OJAD's per-mora output for its range carries no FALL. This
+    # typically happens when the word sits in the medial position of a long
+    # prosodic phrase and OJAD's CRF collapses its kernel into the
+    # surrounding contour (the 忙しい-inside-お忙しい中 case).
+    kernel_absorbed = (
+        isinstance(lexical_kernel, int)
+        and lexical_kernel >= 1
+        and not any(a.accent_marking_type == 2 for a in accents)
+    )
+    # Numerics and readable-symbol compounds (e.g. `2%`) carry no kana
+    # furigana of their own — surface OJAD's reading instead.
+    display = (
+        "".join(e["text"] for e in voiced_span)
+        if (is_numeric or is_readable_compound)
+        else token_furigana
+    )
     return WordAccentResult(
-        surface=yahoo_surface,
+        surface=token_surface,
         furigana=display,
         accent=accents,
         subword=subword,
+        base=base,
+        pos=pos,
+        pos1=pos1,
+        conjugation_type=conjugation_type,
+        conjugation_form=conjugation_form,
+        lexical_kernel=lexical_kernel,
+        lexical_kernel_alts=lexical_kernel_alts,
+        kernel_absorbed=kernel_absorbed,
     )
 
 
-def _fallback_word(token: Any) -> WordAccentResult:
+def _fallback_word(token: WordResult) -> WordAccentResult:
     return _build_word_result(token, [])
 
 
 async def align_accent(
-    furigana_results: list[Any], ojad_results: list[dict[str, Any]]
+    furigana_results: list[WordResult], ojad_results: list[dict[str, Any]]
 ) -> list[WordAccentResult]:
-    """Align yahoo furigana with OJAD per-moji entries via global DP.
+    """Align tokens with OJAD per-moji entries via global DP.
 
-    Returns one WordAccentResult per Yahoo token. Each token consumes a
+    Returns one WordAccentResult per input token. Each token consumes a
     (possibly empty) contiguous span of OJAD entries; the assignment that
     minimises total mismatch cost wins.
     """
@@ -340,11 +443,12 @@ async def align_accent(
         return [_fallback_word(t) for t in furigana_results]
 
     # Pre-compute per-token classification and OJAD texts.
-    token_kinds: list[tuple[bool, bool]] = []
+    token_kinds: list[tuple[bool, bool, bool]] = []
     for t in furigana_results:
-        is_num = bool(numeric_pattern.match(t.surface))
-        is_pct = _is_punct_token(t.furigana, is_num)
-        token_kinds.append((is_num, is_pct))
+        is_num = bool(NUMERIC_PATTERN.match(t.surface))
+        is_compound = bool(READABLE_COMPOUND_RE.match(t.surface))
+        is_pct = (not is_compound) and _is_punct_token(t.furigana, is_num)
+        token_kinds.append((is_num, is_pct, is_compound))
     ojad_texts = [e["text"] for e in ojad_results]
 
     # dp[i][j] = best cost aligning tokens [0..i) to ojad entries [0..j).
@@ -354,14 +458,16 @@ async def align_accent(
 
     for i in range(n):
         token = furigana_results[i]
-        is_num, is_pct = token_kinds[i]
+        is_num, is_pct, is_compound = token_kinds[i]
         for j in range(m + 1):
             base = dp[i][j]
             if base == _INF:
                 continue
             k_limit = min(_K_MAX, m - j)
             for k in range(0, k_limit + 1):
-                cost = _match_cost(token, ojad_texts[j : j + k], is_num, is_pct)
+                cost = _match_cost(
+                    token, ojad_texts[j : j + k], is_num, is_pct, is_compound
+                )
                 if cost == _INF:
                     continue
                 new_cost = base + cost

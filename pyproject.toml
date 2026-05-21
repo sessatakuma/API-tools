@@ -8,10 +8,12 @@ dependencies = [
     "beautifulsoup4>=4.14.2",
     "dotenv>=0.9.9",
     "fastapi>=0.120.0",
+    "fugashi>=1.5.2",
     "httpx>=0.28.1",
     "jaconv>=0.4.0",
     "neologdn>=0.5.4",
     "pydantic>=2.12.3",
+    "unidic>=1.1.0",
     "uvicorn>=0.38.0",
 ]
 
