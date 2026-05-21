@@ -280,8 +280,20 @@ def _match_cost(
         # Japanese token. `_build_word_result` filters those punct
         # entries back out so they don't surface as ruby when the
         # English toggle is on.
+        #
+        # k=0 is also free: OJAD often elides English entirely when
+        # it's interleaved with kana (Whisper inside `ふりがなWhisper`,
+        # satochin inside `深掘りライターsatochin氏`, URLPLACEHOLDER
+        # after strip_urls). Charging _FALLBACK_COST for k=0 made the
+        # DP steal a mora from the neighbouring kana token to dodge
+        # the penalty — the cascade that left ふりがな missing 'な',
+        # コメント empty-spanned, ライター missing 'ー', and テスト
+        # missing 'テ' in test_0/test_1. Free k=0 keeps spelled-out
+        # cases (`G2P` → ジーツーピー) working because forcing those
+        # OJAD morae onto a neighbouring kana token still costs more
+        # edit-distance than letting the english token take them.
         if k == 0:
-            return _FALLBACK_COST
+            return 0.0
         # Loose upper: ~4 morae per char (covers OJAD's longest letter
         # spellings, e.g. `M` → エム = 2 morae, but headroom for the
         # digit pieces that can spell out to 4 morae like ナナ for 7).
