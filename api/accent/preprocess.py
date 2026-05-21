@@ -305,6 +305,41 @@ def split_sentences(line: str) -> list[str]:
 # leaking onto the preceding digits.
 READABLE_SYMBOLS = {"%", "％", "℃", "°", "$", "＄", "¥", "￥", "€"}
 
+# Standalone-symbol → katakana reading. OJAD spells these out as multi-mora
+# katakana when they appear mid-text (`#病` → シャープびょう). UniDic's
+# `feat.kana` is empty for these chars, so `tokenizer.tag_local` would emit
+# furigana='' and `align._match_cost`'s edit-distance branch would refuse
+# them (`|len(y)-len(o)|>3` cuts off) — the OJAD morae then leak onto the
+# neighbouring kana token (the `#病→と` cascade in test_0 idx 1411).
+# Filling in a reading here lets the aligner match the OJAD span at
+# edit-distance 0.
+SYMBOL_READINGS = {
+    "#": "シャープ",
+    "＃": "シャープ",
+    "%": "パーセント",
+    "％": "パーセント",
+    "@": "アットマーク",
+    "＠": "アットマーク",
+    "&": "アンド",
+    "＆": "アンド",
+    "+": "プラス",
+    "＋": "プラス",
+    "=": "イコール",
+    "＝": "イコール",
+    "$": "ドル",
+    "＄": "ドル",
+    "¥": "エン",
+    "￥": "エン",
+    "€": "ユーロ",
+    "℃": "ドシー",
+    "°": "ド",
+    "*": "アスタリスク",
+    "＊": "アスタリスク",
+    "~": "チルダ",
+    "～": "チルダ",
+    "§": "セクション",
+}
+
 # Numeric pattern accepted as a "standalone number" token (also reused by
 # align.py for is_numeric classification).
 NUMERIC_PATTERN = re.compile(r"^-?\d+(\.\d+)?$")
@@ -369,6 +404,7 @@ __all__ = [
     "NUMERIC_PATTERN",
     "READABLE_COMPOUND_RE",
     "READABLE_SYMBOLS",
+    "SYMBOL_READINGS",
     "has_japanese",
     "merge_readable_symbol_compounds",
     "restore_number_commas",

@@ -20,11 +20,18 @@ canonical call order.
 
 from __future__ import annotations
 
-from api.accent.models import AccentInfo, WordAccentResult
+import logging
+
+import jaconv
+
+from api.accent.models import AccentInfo, WordAccentResult, WordResult
 from api.accent.preprocess import (
     NUMERIC_PATTERN,
     READABLE_COMPOUND_RE,
+    SYMBOL_READINGS,
 )
+
+logger = logging.getLogger("api")
 
 
 def _is_pure_punct_surface(surface: str) -> bool:
@@ -40,6 +47,12 @@ def _is_pure_punct_surface(surface: str) -> bool:
     if NUMERIC_PATTERN.match(surface):
         return False
     if READABLE_COMPOUND_RE.match(surface):
+        return False
+    # Standalone symbols with a spoken reading (`#`, `%`, `@` …) carry
+    # real morae after `tokenizer.tag_local` fills in a `SYMBOL_READINGS`
+    # fallback. Treating them as punct here would wipe both the ruby and
+    # the per-mora pitch list emitted by the aligner.
+    if surface in SYMBOL_READINGS:
         return False
     # Inline `is_kana_or_kanji` to keep postprocess free of align.py imports.
     exception_symbols = {"゠", "・", "ー", "ヽ", "ヾ", "ヿ"}
@@ -328,4 +341,213 @@ def suppress_particle_furigana(
             )
         else:
             out.append(w)
+    return out
+
+
+# --- okurigana subword split -------------------------------------------------
+
+
+def _is_kanji_char(c: str) -> bool:
+    """CJK Unified Ideographs (BMP + Ext A/B). Matches the kanji we care
+    about for okurigana segmentation — fugashi only ever emits chars
+    inside these ranges as kanji."""
+    cp = ord(c)
+    return (
+        0x3400 <= cp <= 0x4DBF  # Ext A
+        or 0x4E00 <= cp <= 0x9FFF  # Unified
+        or 0x20000 <= cp <= 0x2A6DF  # Ext B
+    )
+
+
+def _is_kana_char(c: str) -> bool:
+    """Hiragana + katakana block, including small kana, chōonpu, and
+    nakaguro (`・`)."""
+    cp = ord(c)
+    return 0x3040 <= cp <= 0x309F or 0x30A0 <= cp <= 0x30FF
+
+
+def _segment_kanji_kana(surface: str, furigana: str) -> list[WordResult] | None:
+    """Split a mixed kanji+kana surface against its hiragana reading.
+
+    Returns one `WordResult` per surface segment: kanji runs carry their
+    furigana slice, kana runs carry `furigana=""`. Returns None when the
+    surface contains chars that are neither kanji nor kana (numerals,
+    symbols, ASCII — we don't try to segment those), or when the kana
+    in the surface can't be aligned to the reading (irregular reading;
+    fall back to emitting no subword).
+
+    Example: `聞き分け` + `ききわけ` → [{聞|き}, {き|""}, {分|わ}, {け|""}].
+    """
+    if not surface or not furigana:
+        return None
+    kinds: list[str] = []
+    for c in surface:
+        if _is_kanji_char(c):
+            kinds.append("kanji")
+        elif _is_kana_char(c):
+            kinds.append("kana")
+        else:
+            return None
+    if "kanji" not in kinds:
+        return None
+
+    reading = jaconv.kata2hira(furigana)
+    segments: list[WordResult] = []
+    s_idx = 0
+    r_idx = 0
+    n = len(surface)
+    while s_idx < n:
+        if kinds[s_idx] == "kanji":
+            run_start = s_idx
+            while s_idx < n and kinds[s_idx] == "kanji":
+                s_idx += 1
+            kanji_run = surface[run_start:s_idx]
+            if s_idx >= n:
+                slice_end = len(reading)
+            else:
+                next_kana = jaconv.kata2hira(surface[s_idx])
+                slice_end = reading.find(next_kana, r_idx + 1)
+                if slice_end == -1:
+                    return None
+            kanji_furi = reading[r_idx:slice_end]
+            if not kanji_furi:
+                return None
+            segments.append(WordResult(surface=kanji_run, furigana=kanji_furi))
+            r_idx = slice_end
+        else:
+            surf_h = jaconv.kata2hira(surface[s_idx])
+            if r_idx >= len(reading) or reading[r_idx] != surf_h:
+                return None
+            segments.append(WordResult(surface=surface[s_idx], furigana=""))
+            s_idx += 1
+            r_idx += 1
+    if r_idx != len(reading):
+        return None
+    return segments
+
+
+def split_okurigana(
+    result: list[WordAccentResult],
+) -> list[WordAccentResult]:
+    """Populate `subword` for tokens with mixed kanji + kana surfaces.
+
+    Top-level `surface` / `furigana` / `accent` stay untouched — the
+    `subword` list adds a per-segment view so clients that want the
+    `聞|き|分|け` reading style can render furigana only over the kanji
+    portions. Tokens whose surface is pure kanji, pure kana, or contains
+    non-CJK chars are left as-is. Irregular readings that can't be
+    aligned against the surface kana also skip the split — we preserve
+    the flat representation rather than emit garbled segments.
+    """
+    out: list[WordAccentResult] = []
+    for w in result:
+        segments = _segment_kanji_kana(w.surface, w.furigana)
+        if not segments or len(segments) <= 1:
+            out.append(w)
+            continue
+        out.append(
+            WordAccentResult(
+                surface=w.surface,
+                furigana=w.furigana,
+                accent=w.accent,
+                subword=segments,
+                base=w.base,
+                pos=w.pos,
+                pos1=w.pos1,
+                conjugation_type=w.conjugation_type,
+                conjugation_form=w.conjugation_form,
+                lexical_kernel=w.lexical_kernel,
+                lexical_kernel_alts=w.lexical_kernel_alts,
+                kernel_absorbed=w.kernel_absorbed,
+            )
+        )
+    return out
+
+
+# --- furigana script conversion ----------------------------------------------
+
+
+_SCRIPT_LITERALS = ("hiragana", "katakana", "romaji")
+
+
+def _convert_one(s: str, script: str) -> str:
+    """Convert a kana string to the target script.
+
+    `jaconv.kata2hira` normalises mixed-script input first so per-mora
+    furigana that OJAD echoed back as katakana (`ラ`, `イ` for ライター)
+    end up matching the script the caller asked for, instead of leaking
+    through verbatim.
+    """
+    if not s:
+        return s
+    hira = jaconv.kata2hira(s)
+    if script == "hiragana":
+        return hira
+    if script == "katakana":
+        return jaconv.hira2kata(hira)
+    if script == "romaji":
+        return jaconv.kana2alphabet(hira)
+    return s
+
+
+def convert_furigana_script(
+    result: list[WordAccentResult],
+    script: str,
+) -> list[WordAccentResult]:
+    """Rewrite every furigana field to the requested script.
+
+    Internal alignment / accent prediction stays hiragana; this is the
+    last response-shape pass before serialisation. Covers top-level
+    `furigana`, every `AccentInfo.furigana`, and every `subword[].furigana`.
+
+    Even the default `hiragana` runs through here so per-mora furigana
+    that OJAD echoed back as katakana (e.g. `ラ`/`イ` morae on
+    ライター) gets normalised to hiragana — without this pass, the
+    per-mora script was inconsistent between katakana-surface and
+    kanji-surface tokens.
+
+    `accent[].length` is recomputed against the converted string so
+    clients that draw the pitch overlay against the rendered ruby get
+    a correct width — `len("shi") = 3` for the mora `し` in romaji mode
+    is intentional (the ruler widens accordingly).
+    """
+    if script not in _SCRIPT_LITERALS:
+        return result
+    out: list[WordAccentResult] = []
+    for w in result:
+        new_accent: list[AccentInfo] = []
+        for a in w.accent:
+            new_furi = _convert_one(a.furigana, script)
+            new_accent.append(
+                AccentInfo(
+                    furigana=new_furi,
+                    accent_marking_type=a.accent_marking_type,
+                    length=len(new_furi) if new_furi else a.length,
+                )
+            )
+        new_subword: list[WordResult] = []
+        for s in w.subword:
+            new_subword.append(
+                WordResult(
+                    surface=s.surface,
+                    furigana=_convert_one(s.furigana, script),
+                    subword=s.subword,
+                )
+            )
+        out.append(
+            WordAccentResult(
+                surface=w.surface,
+                furigana=_convert_one(w.furigana, script),
+                accent=new_accent,
+                subword=new_subword,
+                base=w.base,
+                pos=w.pos,
+                pos1=w.pos1,
+                conjugation_type=w.conjugation_type,
+                conjugation_form=w.conjugation_form,
+                lexical_kernel=w.lexical_kernel,
+                lexical_kernel_alts=w.lexical_kernel_alts,
+                kernel_absorbed=w.kernel_absorbed,
+            )
+        )
     return out

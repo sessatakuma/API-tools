@@ -14,6 +14,8 @@ fields are exposed in the response.
 
 from __future__ import annotations
 
+from typing import Literal
+
 from pydantic import BaseModel, Field
 
 
@@ -38,6 +40,17 @@ class Request(BaseModel):
             "already read katakana doesn't need ruby on コーヒー. The "
             "per-mora pitch contour in `accent` is returned either way — "
             "this flag only controls the top-level ruby."
+        ),
+    )
+    script: Literal["hiragana", "katakana", "romaji"] = Field(
+        default="hiragana",
+        description=(
+            "Output script for every furigana field. Internal alignment "
+            "and accent prediction stay hiragana — this flag only "
+            "rewrites the response surface (top-level `furigana`, every "
+            "`AccentInfo.furigana`, and every `subword[].furigana`). "
+            "Romaji uses jaconv's default Hepburn-style table (`おう` "
+            "→ `ou`); no macrons."
         ),
     )
 
