@@ -23,7 +23,8 @@ from slowapi.middleware import SlowAPIMiddleware
 from slowapi.util import get_remote_address
 from starlette.status import HTTP_403_FORBIDDEN
 
-from api import accent_marker, dict_query, furigana_marker, sentence_query, usage_query
+from api import dict_query, sentence_query, usage_query
+from api.accent import accent_router, furigana_router
 from config.settings import ALLOW_ORIGINS, ALLOWED_HOSTS, X_API_KEY
 
 
@@ -85,10 +86,10 @@ async def get_api_key(api_key: str = Security(api_key_header)) -> None:
 
 # Include routers from different modules
 app.include_router(
-    accent_marker.router, prefix="/api", dependencies=[Depends(get_api_key)]
+    accent_router, prefix="/api", dependencies=[Depends(get_api_key)]
 )
 app.include_router(
-    furigana_marker.router, prefix="/api", dependencies=[Depends(get_api_key)]
+    furigana_router, prefix="/api", dependencies=[Depends(get_api_key)]
 )
 app.include_router(
     usage_query.router, prefix="/api", dependencies=[Depends(get_api_key)]
