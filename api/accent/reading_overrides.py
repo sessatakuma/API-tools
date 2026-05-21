@@ -114,45 +114,36 @@ def _mora_seq(text: str, t: int = _HEIBAN) -> tuple[tuple[str, int], ...]:
     return tuple((m, t) for m in _split_morae(text))
 
 
-def _accent_from_spec(furi: str, spec: Any) -> tuple[tuple[str, int], ...]:
-    """Build an accent tuple from a USER_PATCHES `accent_spec`.
+def _accent_from_spec(
+    furi: str, spec: tuple[int, ...]
+) -> tuple[tuple[str, int], ...] | None:
+    """Zip a per-mora int tuple onto the morae of `furi`.
 
-    `spec` accepts:
-      - None / `"heiban"`  — every mora HIGH (default)
-      - `"atamadaka"`      — first mora FALL, rest LOW
-      - `"low"`            — every mora LOW
-      - tuple of ints      — explicit per-mora type (0=LOW / 1=HIGH /
-                             2=FALL); length must match the mora count
-                             of `furi` or the patch falls back to heiban
-                             with a warning.
-    Any other value warns and falls back to heiban.
+    Returns `None` when `spec` isn't a tuple of ints or its length
+    doesn't match the mora count of `furi` — the caller (typically
+    `_user_patch_overrides`) treats `None` as a validation failure
+    and skips the offending patch entry.
+
+    Mora splitting follows `_split_morae`: small kana attach to the
+    preceding mora, so `じゅ` is one entry.
     """
+    if not isinstance(spec, tuple) or not all(isinstance(x, int) for x in spec):
+        logger.warning(
+            "user patch accent spec must be a tuple of ints, got %r for %r",
+            spec,
+            furi,
+        )
+        return None
     morae = _split_morae(furi)
-    if not morae:
-        return ()
-    if spec is None or spec == "heiban":
-        return tuple((m, _HEIBAN) for m in morae)
-    if spec == "atamadaka":
-        return ((morae[0], _FALL),) + tuple((m, _NONE) for m in morae[1:])
-    if spec == "low":
-        return tuple((m, _NONE) for m in morae)
-    if isinstance(spec, tuple) and all(isinstance(x, int) for x in spec):
-        if len(spec) != len(morae):
-            logger.warning(
-                "user patch accent_spec length %d != mora count %d for %r; "
-                "falling back to heiban.",
-                len(spec),
-                len(morae),
-                furi,
-            )
-            return tuple((m, _HEIBAN) for m in morae)
-        return tuple((m, t) for m, t in zip(morae, spec))
-    logger.warning(
-        "unknown user patch accent_spec %r for %r; falling back to heiban.",
-        spec,
-        furi,
-    )
-    return tuple((m, _HEIBAN) for m in morae)
+    if len(spec) != len(morae):
+        logger.warning(
+            "user patch accent spec length %d != mora count %d for %r",
+            len(spec),
+            len(morae),
+            furi,
+        )
+        return None
+    return tuple((m, t) for m, t in zip(morae, spec))
 
 
 def _atamadaka_seq(text: str) -> tuple[tuple[str, int], ...]:
@@ -365,34 +356,23 @@ def _age_overrides() -> list[FuriganaOverride]:
 def _user_patch_overrides() -> list[FuriganaOverride]:
     """Compile `user_patches.USER_PATCHES` into FuriganaOverride entries.
 
-    Each dict value is `((segment_surface, segment_furigana), ...)`;
-    the segment surfaces must concatenate to the key. Heiban accent
-    is assumed for the whole reading — patches needing fancier accent
-    contours should be written as full FuriganaOverride entries here
-    instead of going through this helper.
+    Each dict value is a tuple of `(surface, furigana, accent_ints)`
+    3-tuples. The segment surfaces, concatenated, must equal the
+    dict key; each `accent_ints` tuple must have one entry per mora
+    of its segment's furigana. Anything malformed logs a warning
+    and is skipped wholesale (no per-segment fallback).
     """
     out: list[FuriganaOverride] = []
     for literal_text, segments in USER_PATCHES.items():
-        # Each segment is (surf, furi) or (surf, furi, accent_spec).
-        parsed: list[tuple[str, str, Any]] = []
-        bad = False
-        for seg in segments:
-            if len(seg) == 2:
-                parsed.append((seg[0], seg[1], None))
-            elif len(seg) == 3:
-                parsed.append((seg[0], seg[1], seg[2]))
-            else:
-                logger.warning(
-                    "USER_PATCHES[%r]: segment %r is not a 2- or 3-tuple — "
-                    "skipping entry.",
-                    literal_text,
-                    seg,
-                )
-                bad = True
-                break
-        if bad:
+        # Schema check: every segment is exactly (surf, furi, ints).
+        if not all(isinstance(seg, tuple) and len(seg) == 3 for seg in segments):
+            logger.warning(
+                "USER_PATCHES[%r]: every segment must be a 3-tuple "
+                "(surface, furigana, accent_ints) — skipping.",
+                literal_text,
+            )
             continue
-        seg_sum = sum(len(s) for s, _, _ in parsed)
+        seg_sum = sum(len(seg[0]) for seg in segments)
         if seg_sum != len(literal_text):
             logger.warning(
                 "USER_PATCHES[%r]: segment surfaces sum to %d chars but key "
@@ -402,17 +382,25 @@ def _user_patch_overrides() -> list[FuriganaOverride]:
                 len(literal_text),
             )
             continue
+        replacements = []
+        bad = False
+        for surf, furi, spec in segments:
+            accent = _accent_from_spec(furi, spec)
+            if accent is None:
+                bad = True
+                break
+            replacements.append(
+                ReplacementToken(surface=surf, furigana=furi, accent=accent)
+            )
+        if bad:
+            logger.warning(
+                "USER_PATCHES[%r]: accent spec invalid; skipping.", literal_text
+            )
+            continue
         out.append(
             FuriganaOverride(
                 pattern=re.compile(re.escape(literal_text)),
-                replacements=tuple(
-                    ReplacementToken(
-                        surface=surf,
-                        furigana=furi,
-                        accent=_accent_from_spec(furi, spec),
-                    )
-                    for surf, furi, spec in parsed
-                ),
+                replacements=tuple(replacements),
                 description=f"user patch: {literal_text}",
             )
         )
