@@ -50,9 +50,9 @@ async def get_ojad_result(
         response = await client.post(OJAD_URL, data=data)
         response.raise_for_status()
         logger.debug(f"[OJAD] Status Code: {response.status_code}")
-    except Exception as e:
-        logger.error(f"[OJAD] Request Failed: {e}")
-        raise e
+    except Exception:
+        logger.exception("[OJAD] Request Failed")
+        raise
 
     website = response.text
 

@@ -42,7 +42,7 @@ async def process_accent_chunk(text: str, client: httpx.AsyncClient) -> AccentRe
         furigana_results = furigana_response.result
         logger.debug(f"Yahoo Results Count: {len(furigana_results)}")
 
-        ojad_surface, ojad_results = await get_ojad_result(query_text, client)
+        _ojad_surface, ojad_results = await get_ojad_result(query_text, client)
 
         final_results = await align_accent(furigana_results, ojad_results)
 

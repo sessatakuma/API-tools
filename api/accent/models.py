@@ -26,7 +26,7 @@ class ErrorInfo(BaseModel):
 
     code: int = Field(description="The error code that follows JSON-RPC 2.0")
     message: str = Field(
-        description="The error message that describe the details of an error"
+        description="The error message that describes the details of an error"
     )
 
 
@@ -75,7 +75,7 @@ class WordAccentResult(BaseModel):
 
     furigana: str = Field(description="Furigana of given kana and kanji")
     surface: str = Field(description="The (partial of) original query text")
-    accent: list[AccentInfo] = Field(description="The accent of givent word")
+    accent: list[AccentInfo] = Field(description="The accent of given word")
     subword: list[WordResult] = Field(
         default_factory=list,
         description="A list contains more details when a word contains "
@@ -94,7 +94,7 @@ class FuriganaResponse(BaseModel):
     )
     error: ErrorInfo | None = Field(
         default=None,
-        description="An object that describe the details of an error when occur",
+        description="An object that describes the details of an error when one occurs",
     )
 
 
@@ -109,5 +109,5 @@ class AccentResponse(BaseModel):
     )
     error: ErrorInfo | None = Field(
         default=None,
-        description="An object that describe the details of an error when occur",
+        description="An object that describes the details of an error when one occurs",
     )

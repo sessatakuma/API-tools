@@ -7,9 +7,10 @@ length-anchor heuristic (stop when OJAD reaches the next Yahoo
 token's reading); kana / kanji tokens use literal length + content
 matching under kata2hira folding.
 
-The constants `punctuation_marks`, `skip_marks`, and `numeric_pattern`
-plus the `clean_query` / `is_kana_or_kanji` helpers live here because
-they're consumed by alignment.
+Alignment itself uses `numeric_pattern` and `is_kana_or_kanji`. The
+adjacent `punctuation_marks`, `skip_marks`, and `clean_query` are
+carried over from the pre-refactor module as part of the accent
+domain vocabulary and are kept here for downstream PRs (see #47).
 """
 
 from __future__ import annotations
@@ -105,10 +106,13 @@ numeric_pattern = re.compile(r"^-?\d+(\.\d+)?$")
 
 
 def clean_query(query: str) -> str:
-    """For OJAD, the query text should without punctuations and alphabets
-    for better result.
+    """Strip ASCII letters from `query`.
+
+    OJAD's CRF parser gives better results when Latin alphabet runs are
+    removed before submission. Punctuation is intentionally left in
+    place — OJAD relies on it for phrase boundaries.
     """
-    return "".join(chr for chr in query if chr not in skip_marks)
+    return "".join(char for char in query if char not in skip_marks)
 
 
 def is_kana_or_kanji(char: Any) -> bool:

@@ -62,7 +62,15 @@ async def fetch_furigana(text: str, client: httpx.AsyncClient) -> FuriganaRespon
             ),
         )
 
-    result = response.json()
+    try:
+        result = response.json()
+    except ValueError as e:
+        return FuriganaResponse(
+            status=500,
+            result=None,
+            error=ErrorInfo(code=500, message=f"Yahoo API returned invalid JSON: {e}"),
+        )
+
     if "result" not in result or "word" not in result["result"]:
         return FuriganaResponse(
             status=500,
