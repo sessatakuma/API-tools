@@ -1,8 +1,8 @@
 """
-An API interface that provide two functionalities
-(1) Accent Marker   (/api/MarkAccent/)
+An API interface that provide the following functionalities
+(1) Accent Marker   (/api/MarkAccent/  +  /api/MarkAccent/stream/)
 (2) Furigana Marker (/api/MarkFurigana/)
-(3) Usage Query    (/api/UsageQuery/)
+(3) Usage Query     (/api/UsageQuery/)
 (4) Dictionary Query (/api/DictQuery/)
 (5) Sentence Query  (/api/SentenceQuery/)
 """
