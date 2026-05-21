@@ -239,6 +239,11 @@ def flatten_heiban_particle_accent(
     return out
 
 
+def _has_kana(s: str) -> bool:
+    """True if `s` contains at least one hiragana or katakana char."""
+    return any(0x3040 <= ord(c) <= 0x30FF for c in s)
+
+
 def apply_furigana_toggles(
     result: list[WordAccentResult],
     render_english: bool,
@@ -247,7 +252,11 @@ def apply_furigana_toggles(
     """Suppress furigana on English / katakana tokens when their toggle is off.
 
     English (toggle off): clear both furigana AND accent — foreign
-    tokens carry no meaningful Japanese pitch contour.
+    tokens carry no meaningful Japanese pitch contour. Skipped when
+    the token already carries a Japanese reading: unit compounds like
+    `53mm` (furi=みりめーとる) and `33m/s` (furi=めーとるまいびょう)
+    have ASCII surfaces but Japanese furigana fugashi/UniDic resolved
+    for the unit — wiping those would lose the unit reading.
 
     Katakana (toggle off): clear only the top-level `furigana` (a
     learner who reads katakana doesn't need ruby on コーヒー), but keep
@@ -263,7 +272,11 @@ def apply_furigana_toggles(
     out: list[WordAccentResult] = []
     for w in result:
         surface = w.surface
-        if not render_english and _is_pure_english_surface(surface):
+        if (
+            not render_english
+            and _is_pure_english_surface(surface)
+            and not _has_kana(w.furigana)
+        ):
             out.append(
                 WordAccentResult(
                     surface=surface,
