@@ -24,7 +24,7 @@ from __future__ import annotations
 import logging
 import re
 
-from api.accent.models import AccentInfo, WordAccentResult, WordResult
+from api.accent.models import AccentInfo, WordAccentResult
 
 logger = logging.getLogger("api")
 
@@ -352,51 +352,6 @@ READABLE_COMPOUND_RE = re.compile(
 )
 
 
-def merge_readable_symbol_compounds(tokens: list[WordResult]) -> list[WordResult]:
-    """Glue `(digit, %)` style adjacencies into one numeric-like token.
-
-    fugashi splits `2%` into two tokens; the DP's punct branch then refuses
-    to absorb the `パーセント` morae OJAD produces, so they leak onto the
-    digit. Pre-merging gives the alignment a single token whose surface
-    matches what OJAD's phrasing module treated as one phrase, and lets
-    the build path reuse the existing numeric branch that synthesises
-    the displayed furigana from the OJAD span.
-    """
-    merged: list[WordResult] = []
-    i = 0
-    while i < len(tokens):
-        cur = tokens[i]
-        if (
-            i + 1 < len(tokens)
-            and NUMERIC_PATTERN.match(cur.surface)
-            and all(c in READABLE_SYMBOLS for c in tokens[i + 1].surface)
-            and tokens[i + 1].surface
-        ):
-            sym = tokens[i + 1]
-            combined_surface = cur.surface + sym.surface
-            combined_furigana = (cur.furigana or cur.surface) + (
-                sym.furigana or sym.surface
-            )
-            merged.append(
-                WordResult(
-                    surface=combined_surface,
-                    furigana=combined_furigana,
-                    base=None,
-                    pos=None,
-                    pos1=None,
-                    conjugation_type=None,
-                    conjugation_form=None,
-                    lexical_kernel=None,
-                    lexical_kernel_alts=None,
-                )
-            )
-            i += 2
-        else:
-            merged.append(cur)
-            i += 1
-    return merged
-
-
 # Re-exported so non-pipeline callers can re-build a fallback WordAccentResult
 # without importing AccentInfo separately.
 __all__ = [
@@ -406,7 +361,6 @@ __all__ = [
     "READABLE_SYMBOLS",
     "SYMBOL_READINGS",
     "has_japanese",
-    "merge_readable_symbol_compounds",
     "restore_number_commas",
     "restore_urls",
     "restore_x_between_digits",
