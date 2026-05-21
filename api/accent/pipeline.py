@@ -51,6 +51,7 @@ from api.accent.preprocess import (
     restore_urls,
     restore_x_between_digits,
     split_sentences,
+    strip_acronym_dots_for_ojad,
     strip_number_commas,
     strip_urls,
     strip_x_between_digits,
@@ -133,7 +134,14 @@ async def process_accent_chunk(
             )
         logger.debug(f"Tokeniser Results Count: {len(furigana_results)}")
 
-        _ojad_surface, ojad_results = await get_ojad_result(stripped_text, client)
+        # OJAD-only `.` strip: `Wifi.7` gets normalised to `Wifi。7` by
+        # OJAD, which then collapses the prosody CRF on the rest of the
+        # sentence (downstream accents come back all-zero). Strip the
+        # `.` from the OJAD query so the CRF sees `Wifi7` and produces
+        # a normal contour; fugashi keeps the original surface so the
+        # tokenizer's acronym-merge preserves `Wifi.7` for display.
+        ojad_query_text = strip_acronym_dots_for_ojad(stripped_text)
+        _ojad_surface, ojad_results = await get_ojad_result(ojad_query_text, client)
 
         final_results = await align_accent(furigana_results, ojad_results)
         final_results = apply_accent_overrides(final_results)

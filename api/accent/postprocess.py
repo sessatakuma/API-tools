@@ -94,10 +94,16 @@ def suppress_punct_furigana(
 
 def _is_pure_english_surface(surface: str) -> bool:
     """True if `surface` is non-empty, contains at least one ASCII letter,
-    and every char is an ASCII letter or digit.
+    and every char is an ASCII letter, digit, or acronym bridge
+    (`-` / `_` / `.`).
 
-    Mixed-with-digit tokens like `iPhone7` count as English. Pure-numeric
-    tokens are excluded (they get their reading from OJAD).
+    Mixed-with-digit tokens like `iPhone7` count as English; so do
+    `tokenizer.tag_local`-fused model codes (`PSP-1000`, `Wi-Fi`,
+    `RTX-4090`, `foo_bar1`) and version-style identifiers (`Wifi.7`,
+    `Python3.11`). The bridge allowance must mirror
+    `align._is_english_compound_surface` so the aligner's free-consume
+    branch and `apply_furigana_toggles`'s wipe agree on which surfaces
+    qualify. Pure-numeric / pure-bridge tokens are excluded.
     """
     if not surface:
         return False
@@ -105,7 +111,7 @@ def _is_pure_english_surface(surface: str) -> bool:
     for c in surface:
         if "a" <= c <= "z" or "A" <= c <= "Z":
             has_letter = True
-        elif "0" <= c <= "9":
+        elif "0" <= c <= "9" or c in ("-", "_", "."):
             continue
         else:
             return False
@@ -143,22 +149,38 @@ def _is_heiban_token(w: WordAccentResult) -> bool:
 # noise without information. Caller preference: render these as flat
 # LOW after a heiban word so the per-mora ruler doesn't stretch a HIGH
 # bar across the noun boundary.
-_HEIBAN_FLATTEN_PARTICLES = frozenset({"の", "な", "は", "が"})
+_HEIBAN_FLATTEN_PARTICLES = frozenset({"の", "な", "は", "が", "を", "に", "で"})
+
+# Closing brackets/quotes that don't break the heiban→particle relationship:
+# 「柔道」は still wants the は flattened against 柔道's heiban contour. The
+# closing mark carries no spoken kana (already empty-accent after align), so
+# we treat it as transparent and look further back for the heiban predecessor.
+# Sentence-ending punct (。、 etc.) is deliberately NOT in this set — those
+# mark a real prosodic break and the following particle should keep its OJAD
+# pitch.
+_TRANSPARENT_CLOSE_PUNCT = frozenset(
+    {"」", "』", "）", ")", "〉", "》", "】", "]", "〕", "”", "’"}
+)
 
 
 def flatten_heiban_particle_accent(
     result: list[WordAccentResult],
 ) -> list[WordAccentResult]:
-    """Zero out the pitch on の / な / は / が following a 平板調 word.
+    """Zero out the pitch on の / な / は / が / を / に / で following a 平板調 word.
 
     After a heiban noun (学校, 富士山, 元気 …), OJAD assigns HIGH (1) to
     the trailing particle to maintain the high plateau. Visually that
     paints the particle with a HIGH overlay that adds noise without
     new contour information. The caller prefers LOW (0) instead.
 
-    Restricted to の, な, は, が by design — the four particles where
-    the visual noise was reported. Other particles (に, を, へ, と, で
-    …) keep their OJAD-derived pitch.
+    Scoped to a fixed set of case/topic particles (の, な, は, が, を,
+    に, で) — the ones where the heiban-continuation HIGH was reported
+    as visual noise. Other particles (へ, と, や, も …) keep their
+    OJAD-derived pitch.
+
+    Look-back skips closing brackets/quotes (`_TRANSPARENT_CLOSE_PUNCT`)
+    so 「柔道」は flattens against 柔道, not against the `」` (which has
+    empty accent after align and would otherwise short-circuit the rule).
     """
     out: list[WordAccentResult] = []
     prev: WordAccentResult | None = None
@@ -197,7 +219,10 @@ def flatten_heiban_particle_accent(
             out.append(w)
         # Track the ORIGINAL `w` (pre-modification) so a の-after-の
         # chain doesn't cascade-flatten based on a flat predecessor.
-        prev = w
+        # Closing brackets/quotes are transparent: keep the previous
+        # `prev` so 「柔道」は still sees 柔道 as predecessor.
+        if w.surface not in _TRANSPARENT_CLOSE_PUNCT:
+            prev = w
     return out
 
 
