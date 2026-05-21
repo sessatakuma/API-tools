@@ -1,240 +1,189 @@
 # API-tools
 
+A FastAPI service that marks Japanese pitch accent and furigana on
+input text. The accent pipeline is fully local — fugashi + UniDic for
+morphology, OJAD's suzukikun phrasing endpoint for per-mora pitch.
+No external API keys or `.env` setup required.
+
 > [!WARNING]
-> 
-> This project is still under development!
+> Still under active development. Output shape may shift between
+> commits; check the changelog before pinning a client.
 
-This is a repository that implement several API interfaces for Discord BOT and web interface.
+## Endpoints
 
-Currently we have 2 implemented APIs
-1. Mark Accent API
-2. Mark Furigana API
-3. Usage query API
-4. Disctionary query API
-5. Sentence Query API
+| Endpoint | Description |
+|--|--|
+| `POST /api/MarkAccent/` | Mark pitch accent + furigana on the whole input, returns one `AccentResponse`. |
+| `POST /api/MarkAccent/stream/` | Same pipeline, streams one NDJSON object per `\n`-split sentence as it finishes. |
+| `POST /api/UsageQuery/HeadWords/` | Look up Yahoo Realtime/News headwords for a query (delegates to an external HTTP endpoint). |
+| `POST /api/UsageQuery/URL/` | Resolve headword references to URLs. |
+| `POST /api/DictQuery/` | JMdict dictionary lookup. |
+| `POST /api/SentenceQuery/` | Example-sentence search. |
 
-> [!NOTE]
-> 
-> The following document is only for developer, we will use Swagger UI to generate official API document.
+The MarkFurigana endpoint that lived in earlier versions of the
+service was removed during the Yahoo MA → local fugashi migration;
+callers that need raw tokenisation can use the same `MarkAccent`
+response and ignore the `accent` field, or import
+`api.accent.tokenizer.tag_local` directly when running in-process.
 
-1. Mark Accent
-    > Mark accent of given Japanese text
+## `POST /api/MarkAccent/`
 
-    - **Request URL**
+Request body:
 
-        `https://{TODO}/api/MarkAccent/`
-    - **Request Parameter (POST)**
-        
-        > Note that we only accept POST request
+| Field | Type | Default | Description |
+|--|--|--|--|
+| `text` | string | required | The Japanese text to mark. Newline-separated chunks are processed in parallel under a small semaphore. |
+| `render_english_furigana` | bool | `false` | Show Japanese-style readings on ASCII-letter tokens (`Apple` → `アップル`). |
+| `render_katakana_furigana` | bool | `false` | Show hiragana ruby on pure-katakana tokens (`カメラ` → `かめら`). The per-mora pitch list is returned either way. |
+| `script` | `"hiragana"` \| `"katakana"` \| `"romaji"` | `"hiragana"` | Output script for every furigana field. Internal alignment stays hiragana — this is a response-shape switch. Romaji uses jaconv's default Hepburn-style table (`おう` → `ou`); no macrons. |
 
-        |    Parameter    |  Type  |  Explanation |
-        | --------------- | ------ | ------------ |
-        | text (required) | string | The text to query |
+Response body (`AccentResponse`):
 
-        > Sample request
+```jsonc
+{
+  "status": 200,
+  "result": [
+    {
+      "surface": "聞き分け",
+      "furigana": "ききわけ",
+      "accent": [
+        {"furigana": "き", "accent_marking_type": 0, "length": 1},
+        {"furigana": "き", "accent_marking_type": 1, "length": 1},
+        {"furigana": "わ", "accent_marking_type": 1, "length": 1},
+        {"furigana": "け", "accent_marking_type": 1, "length": 1}
+      ],
+      "subword": [
+        {"surface": "聞", "furigana": "き"},
+        {"surface": "き", "furigana": ""},
+        {"surface": "分", "furigana": "わ"},
+        {"surface": "け", "furigana": ""}
+      ],
+      "kernel_absorbed": false
+    }
+    /* … */
+  ],
+  "error": null
+}
+```
 
-        ```json
-        {
-            "text": "お金を稼ぐ"
-        }
-        ```
+Field reference:
 
-    - **Respond Parameter**
-        
-        |    Parameter    |  Type  |  Explanation |
-        | --------------- | ------ | ------------ |
-        |      status     |  int   | status code [Reference](https://developer.mozilla.org/en-US/docs/Web/HTTP/Reference/Status#server_error_responses) |
-        | result  | object | An array contains marked results |
-        | surface | string | The original input (partial) text |
-        | accent | list | The accent of given word, with furigana and accent type info. 0 for no accent, 1 for plain, 2 for fall down |
-        | subword | object | An array contains more details when a word contains both kanji and kana |
-        | error | object | An object that describe the details of an error when occur |
-        | error/code | integer | [Reference](https://www.jsonrpc.org/specification#error_object)
-        | error/message | string | [Reference](https://www.jsonrpc.org/specification#error_object)
+- `surface` — the original input fragment.
+- `furigana` — full-token reading in the requested `script`. Empty
+  for particles (the `に` / `を` family), punctuation, and pure-English
+  / pure-katakana tokens when their toggle is off.
+- `accent[]` — per-mora pitch list. `accent_marking_type`:
+  - `0` = LOW / unmarked.
+  - `1` = HIGH plateau.
+  - `2` = FALL kernel (高→低 boundary).
+  Drawing the curve: pad LOW before the first HIGH, then HIGH up
+  through any non-FALL morae, then drop after a `type=2` mora.
+- `subword[]` — present when the surface mixes kanji and kana
+  (`聞き分け`, `取り組み`, `飲んで` …). Each segment is one
+  `WordResult`; kanji runs carry their furigana slice, in-line kana
+  carry `furigana=""`. Clients that don't want the segment view can
+  ignore this field — the top-level `surface` / `furigana` /
+  `accent` carry the whole token regardless.
+- `kernel_absorbed` — UniDic says this word has an accent kernel but
+  OJAD's contour for its range has no FALL. Usually means the word
+  sits inside a longer prosodic phrase whose kernel ended up on a
+  neighbouring word; useful as a hint for "this token's pitch may
+  be inherited from context".
 
-        > Sample response
+Symbols with spoken readings (`#`, `%`, `@`, `&`, `+`, `=`, `$`,
+`¥`, `€`, `℃`, `°`, `*`, `~`, `§`) are auto-vocalised in the
+tokeniser. `#` comes back as `surface="#" furigana="しゃーぷ"` plus
+the matching per-mora accent; the previous behaviour silently
+dropped the mora onto the next kana token.
 
-        ```json
-        {
-            "status": 200,
-            "result": [
-                {
-                    "furigana": "おかね",
-                    "surface": "お金",
-                    "accent": [
-                        {
-                            "furigana": "お",
-                            "accent_marking_type": 0
-                        },
-                        {
-                            "furigana": "か",
-                            "accent_marking_type": 1
-                        },
-                        {
-                            "furigana": "ね",
-                            "accent_marking_type": 1
-                        }
-                    ],
-                    "subword": [
-                        {
-                            "furigana": "お",
-                            "surface": "お"
-                        },
-                        {
-                            "furigana": "かね",
-                            "surface": "金"
-                        }
-                    ]
-                },
-                {
-                    "furigana": "を",
-                    "surface": "を",
-                    "accent": [
-                        {
-                            "furigana": "を",
-                            "accent_marking_type": 1
-                        }
-                    ]
-                },
-                {
-                    "furigana": "かせぐ",
-                    "surface": "稼ぐ",
-                    "accent": [
-                        {
-                            "furigana": "か",
-                            "accent_marking_type": 1
-                        },
-                        {
-                            "furigana": "せ",
-                            "accent_marking_type": 2
-                        },
-                        {
-                            "furigana": "ぐ",
-                            "accent_marking_type": 0
-                        }
-                    ],
-                    "subword": [
-                        {
-                            "furigana": "かせ",
-                            "surface": "稼"
-                        },
-                        {
-                            "furigana": "ぐ",
-                            "surface": "ぐ"
-                        }
-                    ]
-                }
-            ],
-            "error": null
-        }
-        ```
+### `POST /api/MarkAccent/stream/`
 
-2. Mark Furigana
-    > Mark furigana of given text
+Same request schema. Streams `application/x-ndjson` — one JSON object
+per chunk, in input order, with two extra fields:
 
-    - **Request URL**
+- `chunk` — original `\n`-split line index (blanks reserve their
+  position so position 2 was empty).
+- `subchunk` — sentence index inside that line.
 
-        `https://{TODO}/api/MarkFurigana/`
-    - **Request Parameter (POST)**
-        
-        > Note that we only accept POST request
+Each object's other fields mirror `AccentResponse`: `status`,
+`result`, `error`.
 
-        |    Parameter    |  Type  |  Explanation |
-        | --------------- | ------ | ------------ |
-        | text (required) | string | The text to query |
+### Examples
 
-        > Sample request
+```bash
+# Default — hiragana ruby, no English ruby, no katakana ruby
+curl -X POST http://127.0.0.1:8000/api/MarkAccent/ \
+     -H 'Content-Type: application/json' \
+     -d '{"text":"聞き分けは取り組みの基本"}'
 
-        ```json
-        {
-            "text": "漢字かな交じり文"
-        }
-        ```
-    
-    - **Respond Parameter**
+# Katakana ruby on katakana words + romaji output
+curl -X POST http://127.0.0.1:8000/api/MarkAccent/ \
+     -H 'Content-Type: application/json' \
+     -d '{"text":"カメラで写真を撮る",
+          "render_katakana_furigana":true,
+          "script":"romaji"}'
+```
 
-        |    Parameter    |  Type  |  Explanation |
-        | --------------- | ------ | ------------ |
-        |      status     |  int   | status code [Reference](https://developer.mozilla.org/en-US/docs/Web/HTTP/Reference/Status#server_error_responses) |
-        | result  | object | An array contains marked results |
-        | surface | string | The original input (partial) text |
-        | furigana | string | The marked furigana |
-        | subword | object | An array contains more details when a word contains both kanji and kana |
-        | error | object | An object that describe the details of an error when occur |
-        | error/code | integer | [Reference](https://www.jsonrpc.org/specification#error_object)
-        | error/message | string | [Reference](https://www.jsonrpc.org/specification#error_object)
+The included `test.sh` helper drives the endpoint and pretty-prints
+one `(surface|furigana|accent_marking_type)` line per mora — see
+`test.sh --help` style usage in the script header.
 
-        > Sample response
+## Build environment
 
-        ```json
-        {
-            "status": "200",
-            "result": [
-                {
-                    "furigana": "かんじ",
-                    "surface": "漢字"
-                },
-                {
-                    "furigana": "かなまじり",
-                    "subword": [
-                    {
-                        "furigana": "かな",
-                        "surface": "かな"
-                    },
-                    {
-                        "furigana": "ま",
-                        "surface": "交"
-                    },
-                    {
-                        "furigana": "じり",
-                        "surface": "じり"
-                    }
-                    ],
-                    "surface": "かな交じり"
-                },
-                {
-                    "furigana": "ぶん",
-                    "surface": "文"
-                }
-            ]
-        }
-        ```
+Download [uv](https://docs.astral.sh/uv/getting-started/installation/)
+and sync the project:
 
-## Build Environment
-
-Download [uv](https://docs.astral.sh/uv/getting-started/installation/) and run this command:
 ```bash
 uv sync
 ```
 
-No environment variables or external API keys are required — the accent pipeline ships with local fugashi + UniDic + OJAD scraping.
+No environment variables or API keys are required.
 
-Authentication (`X-API-KEY`), CORS, and trusted-host middleware were intentionally removed; this service is expected to run behind the parent backend or on a private network.
+## Running
 
-In [jpcorrect-backend](https://github.com/sessatakuma/jpcorrect-backend), the equivalent workflow is `make api-tools`.
-
-## How to run?
-
-Run the service with `uv` (dev mode, with auto-reload):
+Dev mode with auto-reload:
 
 ```bash
 uv run uvicorn main:app --host 127.0.0.1 --port 8000 --reload
 ```
 
-Or run it through Docker from this subdirectory:
+Docker:
 
 ```bash
 docker compose up -d --build
 ```
 
-To check the functionality, you may send POST request with curl as follows.
+Set `API_TOOLS_PORT` in your shell env if you need a different
+host-side port (the compose file falls back to `8000`).
+
+Authentication (`X-API-KEY`), CORS, and trusted-host middleware were
+intentionally removed; this service is expected to sit behind the
+parent backend or on a private network. In
+[jpcorrect-backend](https://github.com/sessatakuma/jpcorrect-backend),
+the equivalent workflow is `make api-tools`.
+
+### Quick smoke test
 
 ```bash
-curl -X POST -H "Content-Type: application/json" -d "{\"text\": \"test\"}" 127.0.0.1:8000/api/MarkFurigana/
+./test.sh "三月五日（土）"
 ```
 
-## How to use a shared `httpx.AsyncClient`?
-If your router needs to send HTTP requests, you can follow the instructions below to use a shared `httpx.AsyncClient`to enhance performance.
+### Regression against a corpus
+
+`scripts/run_10_tests.sh` POSTs every fixture in `data/test_*.txt`
+to `/api/MarkAccent/` and stores the raw JSON + a per-mora text
+view in `output/`. The `data/` and `output/` directories are
+gitignored — drop your own fixtures in to use the harness. Override
+the set with the `TESTS` env var:
+
+```bash
+TESTS="0 15 29" ./scripts/run_10_tests.sh    # 3-file subset
+```
+
+## How to use a shared `httpx.AsyncClient`
+
+If your router needs to send HTTP requests, follow this pattern to
+reuse the connection pool managed by `api.dependencies`:
 
 ```python
 import httpx
@@ -243,9 +192,7 @@ from api.dependencies import get_http_client
 
 router = APIRouter()
 
-@router.post(
-    "/Foo/", tags=["Foo"], response_model=FooResponse
-)
+@router.post("/Foo/", tags=["Foo"], response_model=FooResponse)
 async def foo(
     request: FooRequest, client: httpx.AsyncClient = Depends(get_http_client)
 ):
@@ -256,3 +203,22 @@ async def foo(
     except httpx.HTTPError as e:
         ...
 ```
+
+## Known limitations
+
+- **UniDic-vs-OJAD reading mismatches.** A handful of kanji come
+  back from UniDic with one reading (the lemma) but OJAD pronounces
+  them with the contextual reading (`世`=せ vs UniDic's `よ`,
+  `本当`=ほんとう vs `ほんと`, `他`=ほか vs `た`, `寺`=てら vs `じ`).
+  In those cases the extra OJAD mora can leak onto a 1-mora particle
+  to its right. The 30-fixture corpus exposes four such tokens; see
+  `output/anomalies.md` for the list.
+- **Romaji has no macrons.** `script="romaji"` uses jaconv's
+  default Hepburn table, so long `おう` / `ええ` come back as
+  `ou` / `ee` rather than `ō` / `ē`. Add a macron pass in the
+  client if you need that.
+- **OJAD scrape dependency.** The accent pipeline POSTs each chunk
+  to `https://www.gavo.t.u-tokyo.ac.jp/ojad/phrasing/index`; long
+  documents are capped to 4 in-flight requests so we don't get
+  rate-limited. If OJAD is unreachable, the chunk's `error` field
+  is populated and `status` reflects the failure.

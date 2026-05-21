@@ -26,7 +26,7 @@ import fugashi
 import jaconv
 
 from api.accent.models import WordResult
-from api.accent.preprocess import NUMERIC_PATTERN
+from api.accent.preprocess import NUMERIC_PATTERN, SYMBOL_READINGS
 
 _UNIDIC_NULL = "*"
 
@@ -249,6 +249,12 @@ def tag_local(text: str) -> list[WordResult]:
         kana_kata = _none_if_null(getattr(feat, "kana", None))
         if kana_kata is None:
             kana_kata = _none_if_null(getattr(feat, "pron", None))
+        # UniDic emits empty `kana` for non-CJK symbols (#, %, @ …). OJAD,
+        # however, vocalises them (シャープ, パーセント, アットマーク).
+        # Without a synthetic reading the aligner's edit-distance branch
+        # rejects the OJAD span and morae leak onto the next kana token.
+        if kana_kata is None and surface in SYMBOL_READINGS:
+            kana_kata = SYMBOL_READINGS[surface]
         reading = jaconv.kata2hira(kana_kata) if kana_kata else surface
         primary, alts = _parse_atype(getattr(feat, "aType", None))
         word = WordResult(
