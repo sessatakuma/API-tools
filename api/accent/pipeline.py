@@ -40,7 +40,9 @@ from api.accent.models import AccentResponse, ErrorInfo, WordAccentResult
 from api.accent.ojad import get_ojad_result
 from api.accent.postprocess import (
     apply_furigana_toggles,
+    convert_furigana_script,
     flatten_heiban_particle_accent,
+    split_okurigana,
     suppress_particle_furigana,
     suppress_punct_furigana,
 )
@@ -71,6 +73,7 @@ async def process_accent_chunk(
     client: httpx.AsyncClient,
     render_english_furigana: bool = False,
     render_katakana_furigana: bool = False,
+    script: str = "hiragana",
 ) -> AccentResponse:
     """Run the full accent pipeline on a single chunk of text.
 
@@ -164,9 +167,17 @@ async def process_accent_chunk(
         # redundant top-level furigana on 助詞 tokens so the per-mora
         # pitch overlay isn't crowded out by duplicated ruby.
         final_results = suppress_particle_furigana(final_results)
+        # Split mixed kanji+kana surfaces (`聞き分け`) into per-segment
+        # subwords so clients can render furigana only on the kanji
+        # portions. Top-level surface/furigana/accent stay intact.
+        final_results = split_okurigana(final_results)
         final_results = restore_number_commas(final_results, number_strips)
         final_results = restore_x_between_digits(final_results, x_count)
         final_results = restore_urls(final_results, urls)
+        # Output-script switch runs last so every furigana field
+        # (top-level + per-mora + subword) lands in the requested
+        # script before serialisation. Hiragana is the no-op default.
+        final_results = convert_furigana_script(final_results, script)
 
         return AccentResponse(status=200, result=final_results)
 
@@ -208,6 +219,7 @@ def schedule_chunks(
     client: httpx.AsyncClient,
     render_english_furigana: bool,
     render_katakana_furigana: bool,
+    script: str = "hiragana",
 ) -> list[asyncio.Task[AccentResponse]]:
     """Schedule one `process_accent_chunk` task per chunk under a
     shared semaphore.
@@ -227,6 +239,7 @@ def schedule_chunks(
                 client,
                 render_english_furigana=render_english_furigana,
                 render_katakana_furigana=render_katakana_furigana,
+                script=script,
             )
 
     return [asyncio.create_task(run_chunk(text)) for _, _, text in chunks]

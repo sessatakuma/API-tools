@@ -66,6 +66,7 @@ async def mark_accent(
         client,
         render_english_furigana=request.render_english_furigana,
         render_katakana_furigana=request.render_katakana_furigana,
+        script=request.script,
     )
 
     merged: list[WordAccentResult] = []
