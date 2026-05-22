@@ -209,19 +209,29 @@ uv sync
 
 After build the environment, you should also obtain a Yahoo API Client ID from [Yahoo Japan website](https://developer.yahoo.co.jp/sitemap/).
 
-Then add the sensitive information in file `.env` as follows:
+For local standalone development, copy `.env.example` to `.env` in this directory and fill in the values:
 
 ```env
-YAHOO_API_KEY=<Our Yahoo API Key>
-ALLOW_ORIGINS=<Our Allowed Origins>
-ALLOWED_HOSTS=<Our Allowed Hosts>
-X_API_KEY=<Our X-API-KEY>
+YAHOO_API_KEY=<Our Yahoo API Key>   # required — app asserts on startup
+API_TOOLS_PORT=8000                 # optional — host-side port for docker compose (default 8000)
 ```
+
+Authentication (`X-API-KEY`), CORS, and trusted-host middleware were intentionally removed; this service is expected to run behind the parent backend or on a private network.
+
+In [jpcorrect-backend](https://github.com/sessatakuma/jpcorrect-backend), the equivalent workflow is `make api-tools`.
 
 ## How to run?
 
+Run the service with `uv` (dev mode, with auto-reload):
+
 ```bash
-uvicorn main:app --reload
+uv run uvicorn main:app --host 127.0.0.1 --port 8000 --reload
+```
+
+Or run it through Docker from this subdirectory:
+
+```bash
+docker compose up -d --build
 ```
 
 To check the functionality, you may send POST request with curl as follows.
