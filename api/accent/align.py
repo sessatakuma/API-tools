@@ -1,35 +1,30 @@
+"""Align Yahoo Furigana tokens with OJAD per-mora accent entries.
+
+`align_accent()` walks the Yahoo token list and consumes OJAD entries
+in order, emitting one `WordAccentResult` per Yahoo token. Numeric
+tokens have no Yahoo furigana to compare against so they use a
+length-anchor heuristic (stop when OJAD reaches the next Yahoo
+token's reading); kana / kanji tokens use literal length + content
+matching under kata2hira folding.
+
+Alignment itself uses `numeric_pattern` and `is_kana_or_kanji`. The
+adjacent `punctuation_marks`, `skip_marks`, and `clean_query` are
+carried over from the pre-refactor module as part of the accent
+domain vocabulary and are kept here for downstream PRs (see #47).
 """
-An API that mark accent of given query text
-"""
+
+from __future__ import annotations
 
 import logging
 import re
 import string
 from typing import Any
 
-import httpx
 import jaconv
-import neologdn
-from bs4 import BeautifulSoup
-from fastapi import APIRouter, Depends
-from pydantic import BaseModel, Field
 
-from api.dependencies import get_http_client
-from api.furigana_marker import (
-    ErrorInfo,
-    Request,
-    WordResult,
-    mark_furigana,
-)
+from api.accent.models import AccentInfo, WordAccentResult, WordResult
 
 logger = logging.getLogger("api")
-
-tags_metadata = [
-    {
-        "name": "MarkAccent",
-        "description": "Mark accent of given text",
-    },
-]
 
 punctuation_marks = set(
     [
@@ -106,20 +101,25 @@ punctuation_marks = set(
 ).union(set(string.punctuation))
 skip_marks = set(string.ascii_lowercase + string.ascii_uppercase)
 
+# accept negative integers and decimals
+numeric_pattern = re.compile(r"^-?\d+(\.\d+)?$")
+
 
 def clean_query(query: str) -> str:
+    """Strip ASCII letters from `query`.
+
+    OJAD's CRF parser gives better results when Latin alphabet runs are
+    removed before submission. Punctuation is intentionally left in
+    place — OJAD relies on it for phrase boundaries.
     """
-    For OJAD, the query text should without punctuations and alphabets for better
-    result
-    """
-    return "".join(chr for chr in query if chr not in skip_marks)
+    return "".join(char for char in query if char not in skip_marks)
 
 
 def is_kana_or_kanji(char: Any) -> bool:
-    """Check whether given character is kana or kanji (ignore half-width kana)"""
-    exception_symbols = ["\u30a0", "\u30fb", "\u30fc", "\u30fd", "\u30fe", "\u30ff"]
+    """Check whether given character is kana or kanji (ignore half-width kana)."""
+    exception_symbols = ["゠", "・", "ー", "ヽ", "ヾ", "ヿ"]
     if char in exception_symbols:
-        # '゠', '・', 'ー', 'ヽ', 'ヾ', 'ヿ' which should be regard as punchutation
+        # '゠', '・', 'ー', 'ヽ', 'ヾ', 'ヿ' which should be regarded as punctuation
         return False
     kana = range(0x3040, 0x30FF + 1)
     kanji = range(0x4E00, 0x9FFF + 1)
@@ -128,131 +128,10 @@ def is_kana_or_kanji(char: Any) -> bool:
     return False
 
 
-# class Request(BaseModel):
-#     """Class representing a request object"""
-
-#     text: str = Field(description="The text to query")
-
-
-class AccentInfo(BaseModel):
-    """Class representing an accent information"""
-
-    furigana: str = Field(description="The furigana of given kana and kanji")
-    accent_marking_type: int = Field(
-        description="The type of accent, including none (0), heiban (1), fall (2)"
-    )
-    length: int = Field(description="Length of the furigana")
-
-
-class WordAccentResult(BaseModel):
-    """Class representing a single word result object"""
-
-    furigana: str = Field(description="Furigana of given kana and kanji")
-    surface: str = Field(description="The (partial of) original query text")
-    accent: list[AccentInfo] = Field(description="The accent of givent word")
-    subword: list[WordResult] = Field(
-        default_factory=list,
-        description="""A list contains more details when a \
-        word contains both kanji and kana.""",
-    )
-
-
-class Response(BaseModel):
-    """Class representing a response object"""
-
-    status: int = Field(
-        default=200, description="Status code of response align with RFC 9110"
-    )
-    result: list[WordAccentResult] | None = Field(
-        description="A list contains marked results"
-    )
-    error: ErrorInfo | None = Field(
-        default=None,
-        description="An object that describe the details of an error when occur",
-    )
-
-
-router = APIRouter()
-
-
-async def get_ojad_result(
-    query_text: str,
-    client: httpx.AsyncClient,
-) -> tuple[str, list[dict[str, Any]]]:
-    """Parse cleaned query_text to OJAD, concate whole result as a list"""
-    logger.debug(f"[OJAD] Start fetching for: {query_text}")
-
-    # URL to suzukikun(すずきくん)
-    url = "https://www.gavo.t.u-tokyo.ac.jp/ojad/phrasing/index"
-
-    # Data of the POST method
-    data = {
-        "data[Phrasing][text]": query_text,
-        "data[Phrasing][curve]": "advanced",
-        "data[Phrasing][accent]": "advanced",
-        "data[Phrasing][accent_mark]": "all",
-        "data[Phrasing][estimation]": "crf",
-        "data[Phrasing][analyze]": "true",
-        "data[Phrasing][phrase_component]": "invisible",
-        "data[Phrasing][param]": "invisible",
-        "data[Phrasing][subscript]": "visible",
-        "data[Phrasing][jeita]": "invisible",
-    }
-
-    # Send a POST and receive the website html code
-    try:
-        response = await client.post(url, data=data)
-        response.raise_for_status()
-        logger.debug(f"[OJAD] Status Code: {response.status_code}")
-    except Exception as e:
-        logger.error(f"[OJAD] Request Failed: {e}")
-        raise e
-
-    website = response.text
-
-    # use Beautiful Soup to parse the received html file
-    soup = BeautifulSoup(website, "html.parser")
-
-    # Fetch the required tags
-    phrasing_texts = soup.find_all("div", attrs={"class": "phrasing_text"})
-    phrasing_subscripts = soup.find_all("div", attrs={"class": "phrasing_subscript"})
-
-    paragraph = ""
-    ojad_results = []
-
-    if not phrasing_texts:
-        logger.warning("[OJAD] Warning: No phrasing_texts found in HTML!")
-
-    for furigana, surface in zip(phrasing_texts, phrasing_subscripts):
-        # Fetch subscript text
-        phrase = surface.find_all("span", recursive=False)
-        sentence = ""
-        for p in phrase:
-            sentence += p.get_text()
-        paragraph += sentence
-
-        # Fetch processed data
-        mojis = furigana.find_all("span", recursive=False)
-        for moji in mojis:
-            # Check accent mark (we don't use unvoiced)
-            accent = 0
-            if moji["class"][0] == "accent_plain":
-                accent = 1
-            elif moji["class"][0] == "accent_top":
-                accent = 2
-            ojad_results.append({"text": moji.get_text(), "accent": accent})
-
-    return paragraph, ojad_results
-
-
-# accept negative integers and decimals
-numeric_pattern = re.compile(r"^-?\d+(\.\d+)?$")
-
-
 async def align_accent(
     furigana_results: list[Any], ojad_results: list[dict[str, Any]]
 ) -> list[WordAccentResult]:
-    """Align yahoo furigana with OJAD results, return final accent marked result"""
+    """Align yahoo furigana with OJAD results, return final accent marked result."""
     final_response_results = []
     ojad_idx_cnt = 0
 
@@ -453,41 +332,3 @@ async def align_accent(
                 ojad_idx_cnt += 1
 
     return final_response_results
-
-
-@router.post("/MarkAccent/", tags=["MarkAccent"], response_model=Response)
-async def mark_accent(
-    request: Request, client: httpx.AsyncClient = Depends(get_http_client)
-) -> Response:
-    """Receive POST request, return a Response object"""
-    logger.info(f"[API] Received Request Text: {request.text}")
-    try:
-        query_text = neologdn.normalize(request.text, tilde="normalize")
-
-        furigana_response = await mark_furigana(Request(text=query_text), client)
-
-        # Check yahoo furigana response
-        if furigana_response.status != 200 or not furigana_response.result:
-            logger.warning(f"Yahoo Response Empty or Invalid: {furigana_response}")
-            return Response(
-                status=furigana_response.status,
-                result=None,
-                error=furigana_response.error,
-            )
-
-        furigana_results = furigana_response.result
-        logger.debug(f"Yahoo Results Count: {len(furigana_results)}")
-
-        ojad_surface, ojad_results = await get_ojad_result(query_text, client)
-
-        final_results = await align_accent(furigana_results, ojad_results)
-
-        return Response(status=200, result=final_results)
-
-    except Exception as e:
-        logger.exception(f"Unexpected error occurred: {request.text}")
-        return Response(
-            status=500,
-            result=None,
-            error=ErrorInfo(code=500, message=f"Error: {e}"),
-        )

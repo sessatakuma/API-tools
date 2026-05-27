@@ -14,7 +14,8 @@ from typing import AsyncGenerator
 import httpx
 from fastapi import FastAPI
 
-from api import accent_marker, dict_query, furigana_marker, sentence_query, usage_query
+from api import dict_query, sentence_query, usage_query
+from api.accent import accent_router, furigana_router
 
 
 @asynccontextmanager
@@ -39,12 +40,11 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 app = FastAPI(lifespan=lifespan)
 
 # Include routers from different modules
-app.include_router(accent_marker.router, prefix="/api")
-app.include_router(furigana_marker.router, prefix="/api")
+app.include_router(accent_router, prefix="/api")
+app.include_router(furigana_router, prefix="/api")
 app.include_router(usage_query.router, prefix="/api")
 app.include_router(dict_query.router, prefix="/api")
 app.include_router(sentence_query.router, prefix="/api")
-
 logging.basicConfig(
     level=logging.INFO,
     format="{asctime} [{levelname:^8s}] {message} ({name}.{module}:{lineno})",
