@@ -11,6 +11,13 @@ COPY pyproject.toml uv.lock ./
 # Install dependencies using uv
 RUN uv sync --frozen --no-dev --no-install-project
 
+# Download the full UniDic 3.1.0 dictionary body (~770MB) into the venv so
+# the image is self-contained — the `unidic` pip package ships the loader
+# but not the dicdir, and fugashi.Tagger() fails at runtime without it.
+# Kept as its own layer (before COPY . .) so app-code edits don't bust the
+# download cache; only re-runs when uv.lock / the unidic version changes.
+RUN .venv/bin/python -m unidic download
+
 COPY . .
 
 # Compile only our app code (skip .venv) and drop the .py sources
