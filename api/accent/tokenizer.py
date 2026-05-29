@@ -1,7 +1,7 @@
 """Local UniDic tokeniser (data layer).
 
 Replaces the former Yahoo MA HTTP path with in-process fugashi + NINJAL
-UniDic 3.1.0. Field mapping vs the old Yahoo MA response:
+UniDic CWJ 2025-12-31. Field mapping vs the old Yahoo MA response:
 
     surface          ← token.surface
     furigana         ← jaconv.kata2hira(feat.kana) (fugashi emits katakana)
@@ -41,7 +41,7 @@ def _get_tagger() -> fugashi.Tagger:
     """Lazy-instantiate the fugashi tagger.
 
     Singleton because constructing `fugashi.Tagger()` loads the UniDic
-    dictionary (~774 MB) and takes a second or two; per-request construction
+    dictionary (~1.3 GB) and takes a second or two; per-request construction
     would be wasteful.
     """
     global _TAGGER

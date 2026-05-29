@@ -1,9 +1,9 @@
 # API-tools
 
 A FastAPI service that marks Japanese pitch accent and furigana on
-input text. The accent pipeline is fully local — fugashi + UniDic for
-morphology, OJAD's suzukikun phrasing endpoint for per-mora pitch.
-No external API keys or `.env` setup required.
+input text. The accent pipeline is fully local — fugashi + UniDic
+CWJ 2025-12-31 for morphology, OJAD's suzukikun phrasing endpoint
+for per-mora pitch. No external API keys or `.env` setup required.
 
 > [!WARNING]
 > Still under active development. Output shape may shift between
@@ -130,10 +130,17 @@ Download [uv](https://docs.astral.sh/uv/getting-started/installation/)
 and sync the project:
 
 ```bash
-uv sync
+uv sync                                        # install deps (requires uv)
+./scripts/download_unidic.sh                    # download UniDic CWJ 2025-12-31 (~1.3GB)
 ```
 
 No environment variables or API keys are required.
+
+Pass `cwj-2021-08-31` to install the older UniDic 3.1.0 dictionary
+instead. NINJAL also publishes a **CSJ** (現代話し言葉) variant
+trained on spoken transcripts — pass `csj-2025-12-31` to switch.
+CWJ (書き言葉) is the default; CSJ is preferable for conversational
+or transcribed speech input.
 
 ## Running
 
@@ -193,9 +200,10 @@ async def foo(
 ## Known limitations
 
 - **UniDic-vs-OJAD reading mismatches.** A handful of kanji come
-  back from UniDic with one reading (the lemma) but OJAD pronounces
-  them with the contextual reading (`世`=せ vs UniDic's `よ`,
-  `本当`=ほんとう vs `ほんと`, `他`=ほか vs `た`, `寺`=てら vs `じ`).
+  back from UniDic CWJ 2025-12-31 with one reading (the lemma) but
+  OJAD pronounces them with the contextual reading (`世`=せ vs
+  UniDic's `よ`, `本当`=ほんとう vs `ほんと`, `他`=ほか vs `た`,
+  `寺`=てら vs `じ`).
   In those cases the extra OJAD mora can leak onto a 1-mora particle
   to its right. Known cases (`世`, `本当`, `他`) are patched in
   `api/accent/user_patches.py`; add entries there for new
