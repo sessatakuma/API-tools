@@ -124,10 +124,6 @@ curl -X POST http://127.0.0.1:8000/api/MarkAccent/ \
           "script":"romaji"}'
 ```
 
-The included `test.sh` helper drives the endpoint and pretty-prints
-one `(surface|furigana|accent_marking_type)` line per mora — see
-`test.sh --help` style usage in the script header.
-
 ## Build environment
 
 Download [uv](https://docs.astral.sh/uv/getting-started/installation/)
@@ -165,19 +161,9 @@ the equivalent workflow is `make api-tools`.
 ### Quick smoke test
 
 ```bash
-./test.sh "三月五日（土）"
-```
-
-### Regression against a corpus
-
-`scripts/run_10_tests.sh` POSTs every fixture in `data/test_*.txt`
-to `/api/MarkAccent/` and stores the raw JSON + a per-mora text
-view in `output/`. The `data/` and `output/` directories are
-gitignored — drop your own fixtures in to use the harness. Override
-the set with the `TESTS` env var:
-
-```bash
-TESTS="0 15 29" ./scripts/run_10_tests.sh    # 3-file subset
+curl -s -X POST http://127.0.0.1:8000/api/MarkAccent/ \
+     -H 'Content-Type: application/json' \
+     -d '{"text":"三月五日（土）"}' | python -m json.tool
 ```
 
 ## How to use a shared `httpx.AsyncClient`
@@ -211,8 +197,9 @@ async def foo(
   them with the contextual reading (`世`=せ vs UniDic's `よ`,
   `本当`=ほんとう vs `ほんと`, `他`=ほか vs `た`, `寺`=てら vs `じ`).
   In those cases the extra OJAD mora can leak onto a 1-mora particle
-  to its right. The 30-fixture corpus exposes four such tokens; see
-  `output/anomalies.md` for the list.
+  to its right. Known cases (`世`, `本当`, `他`) are patched in
+  `api/accent/user_patches.py`; add entries there for new
+  mismatches. `寺` remains unpatched.
 - **Romaji has no macrons.** `script="romaji"` uses jaconv's
   default Hepburn table, so long `おう` / `ええ` come back as
   `ou` / `ee` rather than `ō` / `ē`. Add a macron pass in the
