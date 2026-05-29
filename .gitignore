@@ -220,3 +220,7 @@ secret*
 
 data/
 output/
+
+CLAUDE.md
+AGENTS.md
+.claude
