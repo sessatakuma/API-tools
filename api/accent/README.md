@@ -19,7 +19,7 @@ raw tokenisation can import `tokenizer.tag_local` directly.)
 flowchart LR
   text([text input])
   pre["preprocess.py<br/>strip URLs / 1,234 / \\d×\\d<br/>split_sentences"]
-  tok["tokenizer.py<br/>fugashi + UniDic 3.1.0<br/>tag_local + SYMBOL_READINGS"]
+  tok["tokenizer.py<br/>fugashi + UniDic CWJ 2025-12-31<br/>tag_local + SYMBOL_READINGS"]
   fov["reading_overrides.py<br/>apply_furigana_overrides<br/>(date / N日間 / 20歳 / user_patches)"]
   ojad["ojad.py<br/>get_ojad_result<br/>per-mora pitch contour"]
   align["align.py<br/>align_accent<br/>(DP, _match_cost)"]
@@ -108,7 +108,7 @@ The shape of the whole word can be read off the `accent` list:
 | File | Role |
 |---|---|
 | `models.py` | Pydantic schemas (shared between both endpoints), `Request` toggles, strong-mode lexical-accent fields. |
-| `tokenizer.py` | In-process fugashi + NINJAL UniDic 3.1.0 tokeniser — `tag_local`. Includes the `SYMBOL_READINGS` fallback that fills katakana readings for `#`, `%`, `@`, … when UniDic returns no `kana`. |
+| `tokenizer.py` | In-process fugashi + NINJAL UniDic CWJ 2025-12-31 tokeniser — `tag_local`. Includes the `SYMBOL_READINGS` fallback that fills katakana readings for `#`, `%`, `@`, … when UniDic returns no `kana`. |
 | `preprocess.py` | Surface-layer URL / `1,234` / `\d×\d` strip + restore, `has_japanese` gate, `split_sentences`, `READABLE_SYMBOLS`, `SYMBOL_READINGS` table. |
 | `ojad.py` | OJAD scrape against `gavo.t.u-tokyo.ac.jp/ojad/phrasing/index`, parsed with BeautifulSoup. |
 | `align.py` | Needleman-Wunsch-style DP that aligns tokens against OJAD morae — `_match_cost`, edit distance, voicing fold, token kind classification. |
@@ -320,7 +320,7 @@ must run last so it sees the final shape.
 ## Local UniDic tokeniser (`tokenizer.py`)
 
 `tag_local(text) -> list[WordResult]` is the public entry point.
-A module-level `fugashi.Tagger()` singleton keeps the ~774 MB
+A module-level `fugashi.Tagger()` singleton keeps the ~1.3 GB
 dictionary loaded between requests. Field mapping:
 
 | WordResult field | UniDic feature |
