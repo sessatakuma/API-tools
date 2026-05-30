@@ -3,7 +3,11 @@ FROM python:3.11-slim AS builder
 WORKDIR /app
 
 # Install uv for fast dependency management (pinned for reproducible builds)
-RUN pip install --no-cache-dir "uv==0.9.0"
+# and unzip for extracting the NINJAL UniDic archive (Deflate64-compressed).
+RUN pip install --no-cache-dir "uv==0.9.0" \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends unzip \
+    && rm -rf /var/lib/apt/lists/*
 
 # Copy dependency files first for better layer caching
 COPY pyproject.toml uv.lock ./
@@ -11,11 +15,21 @@ COPY pyproject.toml uv.lock ./
 # Install dependencies using uv
 RUN uv sync --frozen --no-dev --no-install-project
 
+# Download and install the UniDic dictionary into the venv so the image is
+# self-contained — the `unidic` pip package ships the loader but not the
+# dicdir, and fugashi.Tagger() fails at runtime without it.
+# Uses scripts/download_unidic.sh so local dev and Docker share the same
+# download logic.  Kept as its own layer (before COPY . .) so app-code
+# edits don't bust the download cache; only re-runs when the script or
+# uv.lock changes.
+COPY scripts/download_unidic.sh scripts/
+RUN VIRTUAL_ENV=/app/.venv bash scripts/download_unidic.sh
+
 COPY . .
 
 # Compile only our app code (skip .venv) and drop the .py sources
-RUN python -m compileall -b -q main.py api config \
-    && find main.py api config -name "*.py" -delete
+RUN python -m compileall -b -q main.py api \
+    && find main.py api -name "*.py" -delete
 
 FROM python:3.11-slim
 
@@ -30,7 +44,6 @@ WORKDIR /app
 COPY --from=builder /app/.venv /app/.venv
 COPY --from=builder /app/main.pyc /app/main.pyc
 COPY --from=builder /app/api /app/api
-COPY --from=builder /app/config /app/config
 
 # Set PATH to use venv binaries
 ENV PATH="/app/.venv/bin:$PATH"

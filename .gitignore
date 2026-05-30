@@ -217,3 +217,10 @@ __marimo__/
 
 # Secrest files
 secret*
+
+data/
+output/
+
+CLAUDE.md
+AGENTS.md
+.claude
