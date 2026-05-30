@@ -19,6 +19,11 @@ RUN python -m compileall -b -q main.py api config \
 
 FROM python:3.11-slim
 
+# Least privilege: run as an unprivileged user, not root. The app binds
+# port 8000 (>1024) so no root is needed. App files stay root-owned and
+# read-only to this user — the process can't modify its own code or deps.
+RUN useradd --system --no-create-home --uid 10001 appuser
+
 WORKDIR /app
 
 # Copy installed dependencies and app from builder
@@ -32,5 +37,7 @@ ENV PATH="/app/.venv/bin:$PATH"
 ENV PYTHONUNBUFFERED=1
 
 EXPOSE 8000
+
+USER appuser
 
 CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
