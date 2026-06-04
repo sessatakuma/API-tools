@@ -111,3 +111,8 @@ class AccentResponse(BaseModel):
         default=None,
         description="An object that describes the details of an error when one occurs",
     )
+    warning: str | None = Field(
+        default=None,
+        description="A non-fatal warning when results are degraded, e.g. furigana "
+        "returned without pitch accent because OJAD was unavailable",
+    )

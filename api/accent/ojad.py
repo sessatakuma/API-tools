@@ -23,6 +23,20 @@ logger = logging.getLogger("api")
 
 OJAD_URL = "https://www.gavo.t.u-tokyo.ac.jp/ojad/phrasing/index"
 
+# Per-request timeout for the OJAD POST. Overrides the global client timeout so a
+# down / unresponsive OJAD fails fast (≈2s on a dead host) instead of hanging for
+# the full global 10s before the pipeline can degrade gracefully.
+OJAD_TIMEOUT = httpx.Timeout(5.0, connect=2.0)
+
+
+class OJADUnavailableError(Exception):
+    """OJAD could not be reached or returned an error.
+
+    Raised on any transport failure (connect / read timeout, connection
+    refused) or non-2xx status. Callers should treat this as "no pitch
+    contour available" and degrade rather than fail the whole request.
+    """
+
 
 async def get_ojad_result(
     query_text: str,
@@ -47,12 +61,14 @@ async def get_ojad_result(
 
     # Send a POST and receive the website html code
     try:
-        response = await client.post(OJAD_URL, data=data)
+        response = await client.post(OJAD_URL, data=data, timeout=OJAD_TIMEOUT)
         response.raise_for_status()
         logger.debug(f"[OJAD] Status Code: {response.status_code}")
-    except Exception:
-        logger.exception("[OJAD] Request Failed")
-        raise
+    except httpx.HTTPError as e:
+        # Covers ConnectTimeout / ReadTimeout / ConnectError as well as the
+        # HTTPStatusError from raise_for_status() — all httpx.HTTPError subclasses.
+        logger.warning(f"[OJAD] Unavailable: {e}")
+        raise OJADUnavailableError(str(e)) from e
 
     website = response.text
 
