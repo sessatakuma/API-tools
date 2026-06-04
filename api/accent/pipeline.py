@@ -18,7 +18,7 @@ import neologdn
 from api.accent.align import align_accent
 from api.accent.furigana import fetch_furigana
 from api.accent.models import AccentResponse, ErrorInfo
-from api.accent.ojad import get_ojad_result
+from api.accent.ojad import OJADUnavailableError, get_ojad_result
 
 logger = logging.getLogger("api")
 
@@ -42,11 +42,24 @@ async def process_accent_chunk(text: str, client: httpx.AsyncClient) -> AccentRe
         furigana_results = furigana_response.result
         logger.debug(f"Yahoo Results Count: {len(furigana_results)}")
 
-        _ojad_surface, ojad_results = await get_ojad_result(query_text, client)
+        # OJAD only enriches the result with pitch accent. If it is down, fall
+        # back to furigana-only output (align_accent emits accent_marking_type=0
+        # for every mora when given an empty list) rather than failing the
+        # request — see api/accent/align.py "MATCH FAILED" branch.
+        warning = None
+        try:
+            _ojad_surface, ojad_results = await get_ojad_result(query_text, client)
+        except OJADUnavailableError as e:
+            logger.warning(f"OJAD unavailable, degrading to furigana-only: {e}")
+            ojad_results = []
+            warning = (
+                "OJAD pitch-accent service is unavailable; "
+                "returning furigana without pitch accent."
+            )
 
         final_results = await align_accent(furigana_results, ojad_results)
 
-        return AccentResponse(status=200, result=final_results)
+        return AccentResponse(status=200, result=final_results, warning=warning)
 
     except Exception as e:
         logger.exception(f"Unexpected error occurred: {text}")
