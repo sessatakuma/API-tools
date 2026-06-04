@@ -20,6 +20,7 @@ Yahoo MA.
 
 from __future__ import annotations
 
+import functools
 import re
 
 import fugashi
@@ -34,20 +35,17 @@ _UNIDIC_NULL = "*"
 # fugashi-split acronym so they can be glued back together below).
 _ALPHA_ONLY_RE = re.compile(r"^[A-Za-z]+$")
 
-_TAGGER: fugashi.Tagger | None = None
 
-
+@functools.lru_cache(maxsize=1)
 def _get_tagger() -> fugashi.Tagger:
     """Lazy-instantiate the fugashi tagger.
 
     Singleton because constructing `fugashi.Tagger()` loads the UniDic
     dictionary (~1.3 GB) and takes a second or two; per-request construction
-    would be wasteful.
+    would be wasteful. `lru_cache` makes the lazy init thread-safe — only one
+    `fugashi.Tagger()` is ever built even under concurrent first calls.
     """
-    global _TAGGER
-    if _TAGGER is None:
-        _TAGGER = fugashi.Tagger()
-    return _TAGGER
+    return fugashi.Tagger()
 
 
 def _none_if_null(value: str | None) -> str | None:
