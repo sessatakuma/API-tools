@@ -72,6 +72,7 @@ async def mark_accent(
     merged: list[WordAccentResult] = []
     worst_status = 200
     first_error: ErrorInfo | None = None
+    first_warning: str | None = None
     for (chunk_idx, sub_idx, _text), task in zip(chunks, tasks):
         try:
             resp = await task
@@ -88,11 +89,16 @@ async def mark_accent(
             worst_status = resp.status
         if resp.error is not None and first_error is None:
             first_error = resp.error
+        # Like `error`, `warning` keeps the first chunk's value — chunks all
+        # degrade the same way (e.g. OJAD down), so one message suffices.
+        if resp.warning is not None and first_warning is None:
+            first_warning = resp.warning
 
     return AccentResponse(
         status=worst_status,
         result=merged if merged else None,
         error=first_error,
+        warning=first_warning,
     )
 
 
@@ -126,6 +132,7 @@ async def mark_accent_stream(
             client,
             render_english_furigana=request.render_english_furigana,
             render_katakana_furigana=request.render_katakana_furigana,
+            script=request.script,
         )
         for (chunk_idx, sub_idx, _text), task in zip(chunks, tasks):
             try:
