@@ -25,7 +25,7 @@ from fastapi import APIRouter, Depends
 from fastapi.responses import StreamingResponse
 
 from api.accent.models import AccentResponse, ErrorInfo, Request, WordAccentResult
-from api.accent.pipeline import build_chunks, schedule_chunks
+from api.accent.pipeline import build_chunks, cancel_pending, schedule_chunks
 from api.dependencies import get_http_client
 
 logger = logging.getLogger("api")
@@ -73,26 +73,32 @@ async def mark_accent(
     worst_status = 200
     first_error: ErrorInfo | None = None
     first_warning: str | None = None
-    for (chunk_idx, sub_idx, _text), task in zip(chunks, tasks):
-        try:
-            resp = await task
-        except Exception as exc:
-            logger.exception(f"Chunk {chunk_idx}.{sub_idx} failed")
-            detail = str(exc) or repr(exc) or type(exc).__name__
-            if first_error is None:
-                first_error = ErrorInfo(code=500, message=f"Error: {detail}")
-            worst_status = max(worst_status, 500)
-            continue
-        if resp.result:
-            merged.extend(resp.result)
-        if resp.status > worst_status:
-            worst_status = resp.status
-        if resp.error is not None and first_error is None:
-            first_error = resp.error
-        # Like `error`, `warning` keeps the first chunk's value — chunks all
-        # degrade the same way (e.g. OJAD down), so one message suffices.
-        if resp.warning is not None and first_warning is None:
-            first_warning = resp.warning
+    # `cancel_pending` in the finally stops in-flight chunks if the client
+    # disconnects mid-request (the handler is cancelled) instead of leaving
+    # them scraping OJAD; on a normal run every task is already done.
+    try:
+        for (chunk_idx, sub_idx, _text), task in zip(chunks, tasks):
+            try:
+                resp = await task
+            except Exception as exc:
+                logger.exception(f"Chunk {chunk_idx}.{sub_idx} failed")
+                detail = str(exc) or repr(exc) or type(exc).__name__
+                if first_error is None:
+                    first_error = ErrorInfo(code=500, message=f"Error: {detail}")
+                worst_status = max(worst_status, 500)
+                continue
+            if resp.result:
+                merged.extend(resp.result)
+            if resp.status > worst_status:
+                worst_status = resp.status
+            if resp.error is not None and first_error is None:
+                first_error = resp.error
+            # Like `error`, `warning` keeps the first chunk's value — chunks
+            # all degrade the same way (e.g. OJAD down), so one suffices.
+            if resp.warning is not None and first_warning is None:
+                first_warning = resp.warning
+    finally:
+        await cancel_pending(tasks)
 
     return AccentResponse(
         status=worst_status,
@@ -134,24 +140,31 @@ async def mark_accent_stream(
             render_katakana_furigana=request.render_katakana_furigana,
             script=request.script,
         )
-        for (chunk_idx, sub_idx, _text), task in zip(chunks, tasks):
-            try:
-                resp = await task
-                payload: dict[str, Any] = {
-                    "chunk": chunk_idx,
-                    "subchunk": sub_idx,
-                    **resp.model_dump(),
-                }
-            except Exception as exc:
-                logger.exception(f"Streaming chunk {chunk_idx}.{sub_idx} failed")
-                detail = str(exc) or repr(exc) or type(exc).__name__
-                payload = {
-                    "chunk": chunk_idx,
-                    "subchunk": sub_idx,
-                    "status": 500,
-                    "result": None,
-                    "error": {"code": 500, "message": f"Error: {detail}"},
-                }
-            yield (json.dumps(payload, ensure_ascii=False) + "\n").encode("utf-8")
+        # If the client disconnects mid-stream, Starlette throws GeneratorExit
+        # into the paused `yield`; the finally then cancels every still-pending
+        # chunk instead of running them to completion against OJAD for output
+        # nobody will read.
+        try:
+            for (chunk_idx, sub_idx, _text), task in zip(chunks, tasks):
+                try:
+                    resp = await task
+                    payload: dict[str, Any] = {
+                        "chunk": chunk_idx,
+                        "subchunk": sub_idx,
+                        **resp.model_dump(),
+                    }
+                except Exception as exc:
+                    logger.exception(f"Streaming chunk {chunk_idx}.{sub_idx} failed")
+                    detail = str(exc) or repr(exc) or type(exc).__name__
+                    payload = {
+                        "chunk": chunk_idx,
+                        "subchunk": sub_idx,
+                        "status": 500,
+                        "result": None,
+                        "error": {"code": 500, "message": f"Error: {detail}"},
+                    }
+                yield (json.dumps(payload, ensure_ascii=False) + "\n").encode("utf-8")
+        finally:
+            await cancel_pending(tasks)
 
     return StreamingResponse(generate(), media_type="application/x-ndjson")

@@ -244,6 +244,14 @@ def schedule_chunks(
     httpx errors. Cap in-flight work so well-behaved inputs still
     parallelise (a 4-chunk paragraph fans out fully) without hammering
     upstream.
+
+    Tasks run detached on the event loop; the caller owns their lifetime
+    and MUST drain them through `cancel_pending` in a `finally` so a client
+    disconnect doesn't leave them scraping OJAD for a response nobody reads.
+    (A `TaskGroup` would tie the lifetime up automatically, but `async with
+    TaskGroup()` inside the streaming async generator wraps the `aclose()`
+    `GeneratorExit` into a `BaseExceptionGroup` — so explicit cancellation is
+    the only shape that closes the stream cleanly.)
     """
     semaphore = asyncio.Semaphore(4)
 
@@ -258,3 +266,19 @@ def schedule_chunks(
             )
 
     return [asyncio.create_task(run_chunk(text)) for _, _, text in chunks]
+
+
+async def cancel_pending(tasks: list[asyncio.Task[AccentResponse]]) -> None:
+    """Cancel any not-yet-finished chunk tasks and await their teardown.
+
+    Called from both endpoints' `finally` so a client disconnect — the
+    `GeneratorExit` thrown into the streaming response, or the collected
+    request handler being cancelled — stops in-flight OJAD scrapes instead
+    of orphaning them. On normal completion every task is already done, so
+    this is a no-op `gather` over finished tasks.
+    """
+    for task in tasks:
+        if not task.done():
+            task.cancel()
+    if tasks:
+        await asyncio.gather(*tasks, return_exceptions=True)
