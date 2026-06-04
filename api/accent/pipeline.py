@@ -136,7 +136,7 @@ async def process_accent_chunk(
                     code=500, message="Tokeniser returned empty token list"
                 ),
             )
-        logger.debug(f"Tokeniser Results Count: {len(furigana_results)}")
+        logger.debug("Tokeniser Results Count: %d", len(furigana_results))
 
         # OJAD-only `.` strip: `Wifi.7` gets normalised to `Wifi。7` by
         # OJAD, which then collapses the prosody CRF on the rest of the
