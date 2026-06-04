@@ -28,7 +28,6 @@ Examples for `ほか` (2 morae):
   | heiban      | `(1, 1)`     | both HIGH            |
   | atamadaka   | `(2, 0)`     | FALL on 1st, LOW 2nd |
   | all-LOW     | `(0, 0)`     | particle-style       |
-    # extra `う` onto the following `の` (test_2 idx 929).
   | nakadaka    | `(0, 2)`     | rise then FALL       |
 
 The segment surfaces, concatenated, MUST equal the key length —
