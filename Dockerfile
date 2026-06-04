@@ -2,11 +2,12 @@ FROM python:3.11-slim AS builder
 
 WORKDIR /app
 
-# Install uv for fast dependency management (pinned for reproducible builds)
-# and unzip for extracting the NINJAL UniDic archive (Deflate64-compressed).
+# Install uv for fast dependency management (pinned for reproducible builds),
+# curl for downloading the NINJAL UniDic archive (scripts/download_unidic.sh
+# line ~74), and unzip for extracting it (Deflate64-compressed).
 RUN pip install --no-cache-dir "uv==0.9.0" \
     && apt-get update \
-    && apt-get install -y --no-install-recommends unzip \
+    && apt-get install -y --no-install-recommends curl unzip \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy dependency files first for better layer caching
