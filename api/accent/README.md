@@ -21,7 +21,7 @@ flowchart LR
   pre["preprocess.py<br/>strip URLs / 1,234 / \\d×\\d<br/>split_sentences"]
   tok["tokenizer.py<br/>fugashi + UniDic CWJ 2025-12-31<br/>tag_local + SYMBOL_READINGS"]
   fov["reading_overrides.py<br/>apply_furigana_overrides<br/>(date / N日間 / 20歳 / user_patches)"]
-  ojad["ojad.py<br/>get_ojad_result<br/>per-mora pitch contour"]
+  oj["openjtalk.py<br/>get_openjtalk_result<br/>in-process per-mora pitch contour"]
   align["align.py<br/>align_accent<br/>(DP, _match_cost)"]
   aov["reading_overrides.py<br/>apply_accent_overrides<br/>apply_accent_patches"]
   post["postprocess.py<br/>flatten / suppress / toggles<br/>+ split_okurigana"]
@@ -33,8 +33,8 @@ flowchart LR
   pre --> tok
   tok --> fov
   fov --> align
-  pre --> ojad
-  ojad --> align
+  pre --> oj
+  oj --> align
   align --> aov
   aov --> post
   post --> restore
@@ -46,6 +46,15 @@ flowchart LR
 sentence-sized chunk; `build_chunks` / `schedule_chunks` fan chunks
 across an in-flight semaphore shared between the collected and
 streaming endpoints.
+
+> **Pitch-accent backend.** The contour comes from **in-process OpenJTalk**
+> (`openjtalk.py`, fully offline — no network). This branch ships OpenJTalk as
+> the sole accent engine for commercial use; the earlier OJAD scrape and the
+> MARINE DNN variant were evaluated and dropped (see the `spike/openjtalk-accent`
+> worktree's `docs/openjtalk-vs-ojad-eval.md` and `docs/commercial-deployment.md`).
+> `align.py`'s `_match_cost` quirks below were originally characterised against
+> OJAD's output, but the aligner is backend-agnostic: it consumes the same
+> `{text, accent}` per-mora shape `openjtalk.py` now produces.
 
 ## Request toggles (`models.py`)
 
@@ -110,20 +119,21 @@ The shape of the whole word can be read off the `accent` list:
 | `models.py` | Pydantic schemas (shared between both endpoints), `Request` toggles, strong-mode lexical-accent fields. |
 | `tokenizer.py` | In-process fugashi + NINJAL UniDic CWJ 2025-12-31 tokeniser — `tag_local`. Includes the `SYMBOL_READINGS` fallback that fills katakana readings for `#`, `%`, `@`, … when UniDic returns no `kana`. |
 | `preprocess.py` | Surface-layer URL / `1,234` / `\d×\d` strip + restore, `has_japanese` gate, `split_sentences`, `READABLE_SYMBOLS`, `SYMBOL_READINGS` table. |
-| `ojad.py` | OJAD scrape against `gavo.t.u-tokyo.ac.jp/ojad/phrasing/index`, parsed with BeautifulSoup. |
-| `align.py` | Needleman-Wunsch-style DP that aligns tokens against OJAD morae — `_match_cost`, edit distance, voicing fold, token kind classification. |
+| `openjtalk.py` | In-process OpenJTalk pitch-accent engine — `get_openjtalk_result`. Maps OpenJTalk full-context labels (via `fullcontext.py`) to the project's `{text, accent}` per-mora shape. Fully offline (MeCab + bundled `open_jtalk_dic`, ~23 MB). |
+| `fullcontext.py` | Shared HTS full-context label parser (`accent_markings_from_labels`) — turns OpenJTalk's per-phoneme labels into the 0/1/2 per-mora marking sequence. |
+| `align.py` | Needleman-Wunsch-style DP that aligns tokens against the engine's morae — `_match_cost`, edit distance, voicing fold, token kind classification. |
 | `reading_overrides.py` | Regex overrides (dates, `N日間`, `20歳→はたち`, weekday `(土)` …) + POS-driven `apply_accent_patches` (ます / たい first-mora-FALL) + compiles `USER_PATCHES`. |
 | `user_patches.py` | **User-maintained** patch table — literal-match overrides for cases where OJAD or UniDic produce the wrong reading. (Pure data; see the dedicated section below.) |
 | `postprocess.py` | Rendering polish: suppress punct / particle furigana, flatten heiban-particle, English / katakana toggles, `split_okurigana`, `convert_furigana_script`. |
-| `pipeline.py` | MarkAccent orchestrator — runs preprocess → tokenizer → overrides → ojad → align → patches → postprocess → restore → script convert. Provides the shared `build_chunks` / `schedule_chunks`. |
+| `pipeline.py` | MarkAccent orchestrator — runs preprocess → tokenizer → overrides → openjtalk → align → patches → postprocess → restore → script convert. Provides the shared `build_chunks` / `schedule_chunks`. |
 | `routes.py` | FastAPI router + the two endpoint handlers (collected and streaming). |
 | `__init__.py` | Re-exports `accent_router` for `main.py`. |
 
 Dependency direction (no cycles):
 
 ```
-routes.py  →  pipeline.py  →  align.py, ojad.py, tokenizer.py,
-                              preprocess.py, postprocess.py,
+routes.py  →  pipeline.py  →  align.py, openjtalk.py → fullcontext.py,
+                              tokenizer.py, preprocess.py, postprocess.py,
                               reading_overrides.py  →  user_patches.py
                             ↘
                               models.py  ←  (every layer imports models)
@@ -351,7 +361,7 @@ appear in the JSON.
 ## Adding endpoints / overrides
 
 - **New endpoint** — add the route in `routes.py`, layer the logic
-  across `tokenizer.py` / `align.py` / `ojad.py` /
+  across `tokenizer.py` / `align.py` / `openjtalk.py` /
   `reading_overrides.py` / `postprocess.py`, then thread it into
   `pipeline.py`.
 - **User-level patch** (most common) — append an entry to

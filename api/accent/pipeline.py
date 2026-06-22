@@ -9,9 +9,10 @@ Threads the layers together:
      `preprocess.SYMBOL_READINGS`, so digits and symbols stay separate
      tokens with the symbol's reading anchored to itself).
   3. `reading_overrides.apply_furigana_overrides` — regex date/duration
-     overrides applied before OJAD so OJAD sees normalised surfaces.
-  4. `ojad.get_ojad_result` — per-mora pitch contour from OJAD.
-  5. `align.align_accent` — DP align tokens ↔ OJAD spans → WordAccentResult.
+     overrides applied before accent so the engine sees normalised surfaces.
+  4. `openjtalk.get_openjtalk_result` — per-mora pitch contour from the
+     in-process OpenJTalk frontend (offline; no network).
+  5. `align.align_accent` — DP align tokens ↔ accent spans → WordAccentResult.
   6. `reading_overrides.apply_accent_overrides` — re-run the same regex
      overrides on aligned results to rewrite furigana + accent in one go.
   7. `reading_overrides.apply_accent_patches` — POS-driven ます / たい
@@ -40,7 +41,7 @@ import neologdn
 
 from api.accent.align import align_accent
 from api.accent.models import AccentResponse, ErrorInfo, WordAccentResult
-from api.accent.ojad import OJADUnavailableError, get_ojad_result
+from api.accent.openjtalk import get_openjtalk_result
 from api.accent.postprocess import (
     apply_furigana_toggles,
     convert_furigana_script,
@@ -138,30 +139,22 @@ async def process_accent_chunk(
             )
         logger.debug("Tokeniser Results Count: %d", len(furigana_results))
 
-        # OJAD-only `.` strip: `Wifi.7` gets normalised to `Wifi。7` by
-        # OJAD, which then collapses the prosody CRF on the rest of the
-        # sentence (downstream accents come back all-zero). Strip the
-        # `.` from the OJAD query so the CRF sees `Wifi7` and produces
-        # a normal contour; fugashi keeps the original surface so the
-        # tokenizer's acronym-merge preserves `Wifi.7` for display.
-        ojad_query_text = strip_acronym_dots_for_ojad(stripped_text)
+        # Acronym `.` strip: `Wifi.7` would otherwise be normalised to
+        # `Wifi。7`, whose injected `。` collapses the prosody on the rest of
+        # the sentence (downstream accents come back all-zero). Strip the `.`
+        # for the accent query so the frontend sees `Wifi7`; fugashi keeps the
+        # original surface so the acronym-merge preserves `Wifi.7` for display.
+        accent_query_text = strip_acronym_dots_for_ojad(stripped_text)
 
-        # OJAD only enriches the result with pitch accent. If it is down, fall
-        # back to furigana-only output (align_accent emits a fallback word with
-        # no pitch contour for every token when given an empty list) rather
-        # than failing the request — see align_accent's `m == 0` branch.
+        # Pitch-accent enrichment from the in-process OpenJTalk frontend.
+        # Fully offline — no network call, so (unlike the old OJAD scrape) it
+        # has no unavailable path. `warning` stays None; it is kept on the
+        # response below for schema parity with clients that handled the old
+        # OJAD-degradation warning.
         warning = None
-        try:
-            _ojad_surface, ojad_results = await get_ojad_result(ojad_query_text, client)
-        except OJADUnavailableError as e:
-            logger.warning(f"OJAD unavailable, degrading to furigana-only: {e}")
-            ojad_results = []
-            warning = (
-                "OJAD pitch-accent service is unavailable; "
-                "returning furigana without pitch accent."
-            )
+        _surface, accent_results = await get_openjtalk_result(accent_query_text, client)
 
-        final_results = await align_accent(furigana_results, ojad_results)
+        final_results = await align_accent(furigana_results, accent_results)
         final_results = apply_accent_overrides(final_results)
         # POS-driven suffix patches run after the full-span overrides so
         # that tokens replaced by overrides (pos=None) are skipped by the
