@@ -37,10 +37,25 @@ def _accent_markings(text: str) -> list[int]:
     return accent_markings_from_labels(labels)
 
 
+def _is_kana_mora(mora: str) -> bool:
+    """True for a real kana mora; False for punctuation g2p passes through.
+
+    `g2p(kana=True)` echoes punctuation (`。`, `、`, `？` …) into its output,
+    but `extract_fullcontext` skips it (sil/pau). The two sequences are zipped
+    by index downstream, so they must be filtered to the same set — otherwise
+    every per-mora accent mark after a mid-sentence punctuation shifts by one.
+    Katakana (incl. the `ー` length mark and small kana) all live in
+    U+30A0–U+30FF; punctuation does not.
+    """
+    return bool(mora) and 0x30A0 <= ord(mora[0]) <= 0x30FF
+
+
 def _kana_morae(text: str) -> list[str]:
-    """Hiragana morae in reading order (one entry per aligned mora)."""
+    """Hiragana morae in reading order, punctuation dropped (one per mora)."""
     kata = pyopenjtalk.g2p(text, kana=True)
-    return [jaconv.kata2hira(m) for m in _KATA_MORA_RE.findall(kata)]
+    return [
+        jaconv.kata2hira(m) for m in _KATA_MORA_RE.findall(kata) if _is_kana_mora(m)
+    ]
 
 
 async def get_openjtalk_result(

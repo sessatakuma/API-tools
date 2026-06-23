@@ -16,6 +16,14 @@ COPY pyproject.toml uv.lock ./
 # Install dependencies using uv
 RUN uv sync --frozen --no-dev --no-install-project
 
+# Download the OpenJTalk dictionary (open_jtalk_dic_utf_8 ~23 MB) into the
+# venv at build time. pyopenjtalk fetches it lazily on first frontend call;
+# baking it here means the runtime (unprivileged appuser, read-only app dir,
+# possibly offline) never has to download it. It lands inside the pyopenjtalk
+# package under /app/.venv, which is copied wholesale into the final image.
+# Own layer (gated by uv.lock) so app-code edits don't bust the download.
+RUN /app/.venv/bin/python -c "import pyopenjtalk; pyopenjtalk.extract_fullcontext('テスト')"
+
 # Download and install the UniDic dictionary into the venv so the image is
 # self-contained — the `unidic` pip package ships the loader but not the
 # dicdir, and fugashi.Tagger() fails at runtime without it.

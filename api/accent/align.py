@@ -21,6 +21,7 @@ edit-distance / voicing-fold tables they depend on.
 from __future__ import annotations
 
 import logging
+import re
 import string
 from typing import Any
 
@@ -142,6 +143,17 @@ def _norm(s: str) -> str:
     """Kata→hira plus voicing fold for rendaku-tolerant alignment."""
     hira = jaconv.kata2hira(s)
     return "".join(_VOICING_FOLD.get(c, c) for c in hira)
+
+
+# Hiragana mora = one base kana + an optional small kana (拗音 ゃゅょ, ぁ-ぉ, ゎ).
+# `ー` (loanword long-vowel mark, e.g. けーき) and っ / ん stand as their own
+# morae, matching how the OpenJTalk frontend counts them.
+_HIRA_MORA_RE = re.compile(r".[ゃゅょぁぃぅぇぉゎ]?")
+
+
+def _split_morae(kana: str) -> list[str]:
+    """Split a hiragana reading into morae (small kana attach to the base)."""
+    return _HIRA_MORA_RE.findall(kana)
 
 
 # --- DP aligner constants ------------------------------------------------------
@@ -474,14 +486,36 @@ def _build_word_result(
             lexical_kernel=lexical_kernel,
             lexical_kernel_alts=lexical_kernel_alts,
         )
-    accents = [
-        AccentInfo(
-            furigana=e["text"],
-            accent_marking_type=e["accent"],
-            length=len(e["text"]),
-        )
-        for e in voiced_span
-    ]
+    # Per-mora ruby comes from the tokeniser's reading, not the engine's g2p
+    # output: g2p spells long vowels phonetically (きょう→きょー, えいご→えーご),
+    # whereas the UniDic reading carries the correct orthography for native
+    # (きょう / えいご) and loanword (けーき, ー kept) words alike. The accent
+    # mark stays from the OpenJTalk span. Both describe the same word, so the
+    # mora counts normally match; if they drift (or for numeric / readable /
+    # English-compound tokens whose furigana isn't the spoken reading) we keep
+    # the engine's mora text rather than mis-zip the two sequences.
+    token_morae = _split_morae(token_furigana)
+    if (
+        not (is_numeric or is_readable_compound or is_english_compound)
+        and len(token_morae) == len(voiced_span)
+    ):
+        accents = [
+            AccentInfo(
+                furigana=token_morae[idx],
+                accent_marking_type=voiced_span[idx]["accent"],
+                length=len(token_morae[idx]),
+            )
+            for idx in range(len(voiced_span))
+        ]
+    else:
+        accents = [
+            AccentInfo(
+                furigana=e["text"],
+                accent_marking_type=e["accent"],
+                length=len(e["text"]),
+            )
+            for e in voiced_span
+        ]
     # `kernel_absorbed`: UniDic says this word has a kernel (lexical_kernel
     # >= 1) but OJAD's per-mora output for its range carries no FALL. This
     # typically happens when the word sits in the medial position of a long
