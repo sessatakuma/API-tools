@@ -495,10 +495,9 @@ def _build_word_result(
     # English-compound tokens whose furigana isn't the spoken reading) we keep
     # the engine's mora text rather than mis-zip the two sequences.
     token_morae = _split_morae(token_furigana)
-    if (
-        not (is_numeric or is_readable_compound or is_english_compound)
-        and len(token_morae) == len(voiced_span)
-    ):
+    if not (is_numeric or is_readable_compound or is_english_compound) and len(
+        token_morae
+    ) == len(voiced_span):
         accents = [
             AccentInfo(
                 furigana=token_morae[idx],
