@@ -30,6 +30,15 @@ logger = logging.getLogger("api")
 # Katakana mora = one base kana + optional small kana (拗音 ゃゅょ, ァ-ォ, ヮ).
 _KATA_MORA_RE = re.compile(r".[ャュョゃゅょァィゥェォヮ]?")
 
+# Punctuation / iteration marks that live inside the katakana block
+# (U+30A0–U+30FF) but are NOT spoken morae: `゠` (double hyphen), `・`
+# (middle dot, common in foreign names like バラク・オバマ), and the
+# iteration marks `ヽヾヿ`. `g2p(kana=True)` echoes these but
+# `extract_fullcontext` drops them, so they must be filtered to keep the
+# two sequences the same length. `ー` (long-vowel mark, U+30FC) IS a mora
+# and is intentionally kept. Mirrors `align.is_kana_or_kanji`.
+_KATA_BLOCK_PUNCT = frozenset("゠・ヽヾヿ")
+
 
 def _accent_markings(text: str) -> list[int]:
     """One 0/1/2 marking per mora, in reading order, across all accent phrases."""
@@ -44,10 +53,15 @@ def _is_kana_mora(mora: str) -> bool:
     but `extract_fullcontext` skips it (sil/pau). The two sequences are zipped
     by index downstream, so they must be filtered to the same set — otherwise
     every per-mora accent mark after a mid-sentence punctuation shifts by one.
-    Katakana (incl. the `ー` length mark and small kana) all live in
-    U+30A0–U+30FF; punctuation does not.
+    Spoken katakana (incl. the `ー` length mark and small kana) live in
+    U+30A0–U+30FF, but so do a few non-spoken marks (`゠・ヽヾヿ`) which must
+    also be excluded — see `_KATA_BLOCK_PUNCT`.
     """
-    return bool(mora) and 0x30A0 <= ord(mora[0]) <= 0x30FF
+    return (
+        bool(mora)
+        and 0x30A0 <= ord(mora[0]) <= 0x30FF
+        and mora[0] not in _KATA_BLOCK_PUNCT
+    )
 
 
 def _kana_morae(text: str) -> list[str]:
