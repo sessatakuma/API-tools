@@ -1,9 +1,10 @@
 # API-tools
 
 A FastAPI service that marks Japanese pitch accent and furigana on
-input text. The accent pipeline is fully local — fugashi + UniDic
-CWJ 2025-12-31 for morphology, OJAD's suzukikun phrasing endpoint
-for per-mora pitch. No external API keys or `.env` setup required.
+input text. The accent pipeline is fully local and offline — fugashi +
+UniDic CWJ 2025-12-31 for morphology, and an in-process OpenJTalk
+frontend (MeCab + the bundled `open_jtalk_dic`) for per-mora pitch. No
+network calls, external API keys, or `.env` setup required.
 
 > [!WARNING]
 > Still under active development. Output shape may shift between
@@ -199,12 +200,12 @@ async def foo(
 
 ## Known limitations
 
-- **UniDic-vs-OJAD reading mismatches.** A handful of kanji come
-  back from UniDic CWJ 2025-12-31 with one reading (the lemma) but
-  OJAD pronounces them with the contextual reading (`世`=せ vs
-  UniDic's `よ`, `本当`=ほんとう vs `ほんと`, `他`=ほか vs `た`,
-  `寺`=てら vs `じ`).
-  In those cases the extra OJAD mora can leak onto a 1-mora particle
+- **UniDic-vs-OpenJTalk reading mismatches.** A handful of kanji come
+  back from UniDic CWJ 2025-12-31 with one reading (the lemma) but the
+  OpenJTalk frontend pronounces them with the contextual reading
+  (`世`=せ vs UniDic's `よ`, `本当`=ほんとう vs `ほんと`, `他`=ほか vs
+  `た`, `寺`=てら vs `じ`).
+  In those cases the extra accent mora can leak onto a 1-mora particle
   to its right. Known cases (`世`, `本当`, `他`) are patched in
   `api/accent/user_patches.py`; add entries there for new
   mismatches. `寺` remains unpatched.
@@ -212,8 +213,10 @@ async def foo(
   default Hepburn table, so long `おう` / `ええ` come back as
   `ou` / `ee` rather than `ō` / `ē`. Add a macron pass in the
   client if you need that.
-- **OJAD scrape dependency.** The accent pipeline POSTs each chunk
-  to `https://www.gavo.t.u-tokyo.ac.jp/ojad/phrasing/index`; long
-  documents are capped to 4 in-flight requests so we don't get
-  rate-limited. If OJAD is unreachable, the chunk's `error` field
-  is populated and `status` reflects the failure.
+- **In-process, CPU-bound accent engine.** The accent pipeline runs
+  OpenJTalk's frontend (MeCab + the bundled `open_jtalk_dic`) in this
+  process — no network, so there is no "backend unreachable" failure
+  mode. The C-extension work runs in a worker thread (serialised behind
+  a lock, since the OpenJTalk frontend is not thread-safe), and long
+  documents are capped to 4 in-flight chunks to bound CPU concurrency
+  rather than to avoid rate-limiting.

@@ -279,8 +279,10 @@ To add an entry:
    confirm it's deterministic.
 2. Append a line to `USER_PATCHES` — start with a heiban
    `(1, 1, …)` if unsure.
-3. Run `./scripts/run_10_tests.sh` to confirm no regression on the
-   30-fixture corpus.
+3. Run `uv run pytest` to confirm the accent unit tests
+   (`tests/test_fullcontext.py`, `tests/test_openjtalk.py`) still
+   pass. (The larger 30-fixture regression corpus and its harness
+   live on the `spike/openjtalk-accent` branch, not here.)
 4. Tune `accent_ints` by ear if the pitch matters.
 
 ## Postprocess passes (`postprocess.py`)
