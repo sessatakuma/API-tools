@@ -5,9 +5,16 @@ WORKDIR /app
 # Install uv for fast dependency management (pinned for reproducible builds),
 # curl for downloading the NINJAL UniDic archive (scripts/download_unidic.sh
 # line ~74), and unzip for extracting it (Deflate64-compressed).
+#
+# build-essential (g++/make) and cmake are required to compile pyopenjtalk:
+# it ships source-only on PyPI (no wheels for any arch) and builds its bundled
+# OpenJTalk/HTS-engine C++ from sdist during `uv sync` below. Without them the
+# build fails at cmake configure ("no CXX compiler"). This is a builder-stage
+# cost only — the toolchain never lands in the slim runtime image.
 RUN pip install --no-cache-dir "uv==0.9.0" \
     && apt-get update \
-    && apt-get install -y --no-install-recommends curl unzip \
+    && apt-get install -y --no-install-recommends \
+       curl unzip build-essential cmake \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy dependency files first for better layer caching
