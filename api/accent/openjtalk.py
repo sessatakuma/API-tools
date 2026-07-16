@@ -15,8 +15,10 @@ This needs no network — it runs MeCab + the bundled open_jtalk_dic in-process
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
+import threading
 from typing import Any
 
 import httpx
@@ -26,6 +28,17 @@ import pyopenjtalk
 from api.accent.fullcontext import accent_markings_from_labels
 
 logger = logging.getLogger("api")
+
+# pyopenjtalk drives a single process-global OpenJTalk C++ frontend whose
+# internal NJD / JPCommon state is shared across calls. pyopenjtalk 0.4.1
+# guards each individual C call with its own mutex, but `extract_fullcontext`
+# is *two* separately-locked calls (`run_frontend` then `make_label`) with
+# that shared C state live in between — so concurrent callers can still
+# interleave and corrupt the frontend. It is not documented thread-safe, so
+# we serialise every access behind our own lock and only ever touch it from a
+# worker thread (via `asyncio.to_thread`) so the CPU-bound C work never blocks
+# the event loop and defeats the pipeline's Semaphore(4) parallelism.
+_OJ_LOCK = threading.Lock()
 
 # Katakana mora = one base kana + optional small kana (拗音 ゃゅょ, ァ-ォ, ヮ).
 _KATA_MORA_RE = re.compile(r".[ャュョゃゅょァィゥェォヮ]?")
@@ -41,8 +54,15 @@ _KATA_BLOCK_PUNCT = frozenset("゠・ヽヾヿ")
 
 
 def _accent_markings(text: str) -> list[int]:
-    """One 0/1/2 marking per mora, in reading order, across all accent phrases."""
-    labels = pyopenjtalk.extract_fullcontext(text)
+    """One 0/1/2 marking per mora, in reading order, across all accent phrases.
+
+    Blocking (C-extension) call — holds `_OJ_LOCK` across the whole
+    `extract_fullcontext` so its internal `run_frontend`/`make_label` pair
+    can't be interleaved by another thread. The label parse afterwards is
+    pure Python and needs no lock.
+    """
+    with _OJ_LOCK:
+        labels = pyopenjtalk.extract_fullcontext(text)
     return accent_markings_from_labels(labels)
 
 
@@ -65,11 +85,26 @@ def _is_kana_mora(mora: str) -> bool:
 
 
 def _kana_morae(text: str) -> list[str]:
-    """Hiragana morae in reading order, punctuation dropped (one per mora)."""
-    kata = pyopenjtalk.g2p(text, kana=True)
+    """Hiragana morae in reading order, punctuation dropped (one per mora).
+
+    Blocking (C-extension) call — holds `_OJ_LOCK` across `g2p`; the mora
+    split afterwards is pure Python and needs no lock.
+    """
+    with _OJ_LOCK:
+        kata = pyopenjtalk.g2p(text, kana=True)
     return [
         jaconv.kata2hira(m) for m in _KATA_MORA_RE.findall(kata) if _is_kana_mora(m)
     ]
+
+
+def _tag(text: str) -> tuple[list[str], list[int]]:
+    """Run the two blocking OpenJTalk frontends and return `(morae, markings)`.
+
+    Runs off the event loop in a worker thread (see `get_openjtalk_result`).
+    Each inner call takes `_OJ_LOCK` for the duration of its C work, so no
+    other thread can touch the shared OpenJTalk state while this one runs.
+    """
+    return _kana_morae(text), _accent_markings(text)
 
 
 async def get_openjtalk_result(
@@ -80,10 +115,15 @@ async def get_openjtalk_result(
 
     Returns `(paragraph, results)` where `results` is a flat list of
     `{"text": <hiragana mora>, "accent": 0|1|2}` for the whole input.
+
+    The pyopenjtalk work is synchronous, CPU-bound C-extension code, so it
+    runs in a worker thread via `asyncio.to_thread` — otherwise it would
+    block the event loop and serialise the pipeline's Semaphore(4) chunk
+    fan-out (worst on `/MarkAccent/stream/`). `_OJ_LOCK` (held inside `_tag`)
+    keeps concurrent workers from corrupting the shared OpenJTalk C state.
     """
     logger.debug(f"[OpenJTalk] Tagging: {query_text}")
-    morae = _kana_morae(query_text)
-    markings = _accent_markings(query_text)
+    morae, markings = await asyncio.to_thread(_tag, query_text)
 
     # Both come from the same OpenJTalk frontend, so mora counts normally
     # agree. If they drift (rare kana-vs-phoneme edge cases), align on the
