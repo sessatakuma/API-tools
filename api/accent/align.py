@@ -1,4 +1,8 @@
-"""Align local-tokeniser tokens with OJAD per-mora accent entries.
+"""Align local-tokeniser tokens with per-mora accent entries.
+
+The per-mora spans now come from `openjtalk.py` (in-process OpenJTalk); the
+"OJAD" naming below is historical — the aligner is intentionally
+backend-agnostic and only consumes the shared `{text, accent}` per-mora shape.
 
 The DP aligner replaces an earlier greedy implementation that had two fatal
 failure modes: a numeric anchor that over-consumed when the tokeniser and

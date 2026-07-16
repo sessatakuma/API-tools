@@ -204,10 +204,10 @@ async def process_accent_chunk(
 def build_chunks(text: str) -> list[tuple[int, int, str]]:
     """Split `text` into (line_idx, sub_idx, sentence) chunks.
 
-    Long paragraphs are split into sentence-sized chunks because OJAD's
-    phrasing predictor degrades on long inputs and a single misalignment
-    used to cascade across the whole paragraph. Splitting also fans the
-    work out under the semaphore.
+    Long paragraphs are split into sentence-sized chunks because a single
+    misalignment used to cascade across the whole paragraph, and shorter
+    inputs give the OpenJTalk frontend a cleaner prosodic phrase to work
+    with. Splitting also fans the work out under the semaphore.
 
     Shared by `/MarkAccent/` (collected) and `/MarkAccent/stream/`
     (yielded) so both endpoints emit byte-identical per-chunk results;
@@ -232,15 +232,16 @@ def schedule_chunks(
     """Schedule one `process_accent_chunk` task per chunk under a
     shared semaphore.
 
-    OJAD's u-tokyo backend falls over when hit with 30+ parallel scrapes
-    — the symptom was most chunks of a long document returning empty-string
-    httpx errors. Cap in-flight work so well-behaved inputs still
-    parallelise (a 4-chunk paragraph fans out fully) without hammering
-    upstream.
+    The semaphore bounds CPU concurrency for the in-process OpenJTalk
+    frontend: each chunk's accent pass runs the C-extension work in a
+    worker thread (see `openjtalk.get_openjtalk_result`), so capping
+    in-flight chunks at 4 keeps a long document from spawning dozens of
+    threads while well-behaved inputs still parallelise (a 4-chunk
+    paragraph fans out fully).
 
     Tasks run detached on the event loop; the caller owns their lifetime
     and MUST drain them through `cancel_pending` in a `finally` so a client
-    disconnect doesn't leave them scraping OJAD for a response nobody reads.
+    disconnect doesn't leave them doing work for a response nobody reads.
     (A `TaskGroup` would tie the lifetime up automatically, but `async with
     TaskGroup()` inside the streaming async generator wraps the `aclose()`
     `GeneratorExit` into a `BaseExceptionGroup` — so explicit cancellation is
@@ -266,7 +267,7 @@ async def cancel_pending(tasks: list[asyncio.Task[AccentResponse]]) -> None:
 
     Called from both endpoints' `finally` so a client disconnect — the
     `GeneratorExit` thrown into the streaming response, or the collected
-    request handler being cancelled — stops in-flight OJAD scrapes instead
+    request handler being cancelled — stops in-flight chunk work instead
     of orphaning them. On normal completion every task is already done, so
     this is a no-op `gather` over finished tasks.
     """
