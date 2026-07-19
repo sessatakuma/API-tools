@@ -102,7 +102,7 @@ def test_mora_and_marking_lengths_match(text: str) -> None:
 
 class TestGetOpenjtalkResult:
     def _run(self, text: str) -> tuple[str, list[dict[str, Any]]]:
-        return asyncio.run(get_openjtalk_result(text, client=None))  # type: ignore[arg-type]
+        return asyncio.run(get_openjtalk_result(text))  # type: ignore[arg-type]
 
     def test_shape_and_marking_domain(self) -> None:
         paragraph, results = self._run("東京・大阪")
@@ -155,8 +155,8 @@ class TestPunctuationDoesNotShiftAccents:
     """
 
     def test_comma_does_not_shift(self) -> None:
-        _, without = asyncio.run(get_openjtalk_result("本を読む", client=None))  # type: ignore[arg-type]
-        _, with_comma = asyncio.run(get_openjtalk_result("本を、読む", client=None))  # type: ignore[arg-type]
+        _, without = asyncio.run(get_openjtalk_result("本を読む"))  # type: ignore[arg-type]
+        _, with_comma = asyncio.run(get_openjtalk_result("本を、読む"))  # type: ignore[arg-type]
         pairs_without = [(r["text"], r["accent"]) for r in without]
         pairs_with = [(r["text"], r["accent"]) for r in with_comma]
         # The comma carries no spoken mora, so the two mora/accent streams
@@ -179,7 +179,7 @@ class TestAsyncPathMatchesDirectCall:
             {"text": morae[i], "accent": markings[i]} for i in range(len(morae))
         ]
         # Async path (asyncio.to_thread + lock).
-        paragraph, results = asyncio.run(get_openjtalk_result(text, client=None))  # type: ignore[arg-type]
+        paragraph, results = asyncio.run(get_openjtalk_result(text))  # type: ignore[arg-type]
         assert results == expected
         assert paragraph == "".join(morae)
 
@@ -190,13 +190,13 @@ class TestAsyncPathMatchesDirectCall:
         texts = corpus * 6  # 60+ overlapping calls
 
         baseline = {
-            t: asyncio.run(get_openjtalk_result(t, client=None))  # type: ignore[arg-type]
+            t: asyncio.run(get_openjtalk_result(t))  # type: ignore[arg-type]
             for t in corpus
         }
 
         async def _gather() -> list[tuple[str, list[dict[str, Any]]]]:
             return await asyncio.gather(
-                *(get_openjtalk_result(t, client=None) for t in texts)  # type: ignore[arg-type]
+                *(get_openjtalk_result(t) for t in texts)  # type: ignore[arg-type]
             )
 
         results = asyncio.run(_gather())

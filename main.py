@@ -6,6 +6,7 @@ An API interface that provide the following functionalities
 (4) Sentence Query  (/api/SentenceQuery/)
 """
 
+import asyncio
 import logging
 from contextlib import asynccontextmanager
 from typing import AsyncGenerator
@@ -15,6 +16,10 @@ from fastapi import FastAPI
 
 from api import dict_query, sentence_query, usage_query
 from api.accent import accent_router
+from api.accent.openjtalk import warmup as warmup_openjtalk
+from api.accent.tokenizer import warmup as warmup_tokenizer
+
+logger = logging.getLogger("api")
 
 
 @asynccontextmanager
@@ -31,6 +36,18 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     """
     # Set up resources before the application starts
     app.state.http_client = httpx.AsyncClient(timeout=10.0)
+
+    # Warm the accent engines (fugashi/UniDic tagger + OpenJTalk frontend) so
+    # the first /MarkAccent/ request doesn't pay the one-off dictionary-load
+    # latency. Both are blocking C-extension loads, so run them off the event
+    # loop and in parallel; startup blocks until they finish (readiness gate).
+    logger.info("Warming up accent engines (UniDic tagger + OpenJTalk)...")
+    await asyncio.gather(
+        asyncio.to_thread(warmup_tokenizer),
+        asyncio.to_thread(warmup_openjtalk),
+    )
+    logger.info("Accent engines ready.")
+
     yield
     # Clean up resources after the application stops
     await app.state.http_client.aclose()

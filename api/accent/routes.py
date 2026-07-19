@@ -20,13 +20,11 @@ import json
 import logging
 from typing import Any, AsyncIterator
 
-import httpx
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter
 from fastapi.responses import StreamingResponse
 
 from api.accent.models import AccentResponse, ErrorInfo, Request, WordAccentResult
 from api.accent.pipeline import build_chunks, cancel_pending, schedule_chunks
-from api.dependencies import get_http_client
 
 logger = logging.getLogger("api")
 
@@ -43,7 +41,6 @@ accent_router = APIRouter()
 @accent_router.post("/MarkAccent/", tags=["MarkAccent"], response_model=AccentResponse)
 async def mark_accent(
     request: Request,
-    client: httpx.AsyncClient = Depends(get_http_client),
 ) -> AccentResponse:
     """Run the same chunked pipeline as `/MarkAccent/stream/`, but
     wait for every chunk to finish and return a single AccentResponse whose
@@ -63,7 +60,6 @@ async def mark_accent(
 
     tasks = schedule_chunks(
         chunks,
-        client,
         render_english_furigana=request.render_english_furigana,
         render_katakana_furigana=request.render_katakana_furigana,
         script=request.script,
@@ -72,10 +68,9 @@ async def mark_accent(
     merged: list[WordAccentResult] = []
     worst_status = 200
     first_error: ErrorInfo | None = None
-    first_warning: str | None = None
     # `cancel_pending` in the finally stops in-flight chunks if the client
-    # disconnects mid-request (the handler is cancelled) instead of leaving
-    # them scraping OJAD; on a normal run every task is already done.
+    # disconnects mid-request (the handler is cancelled); on a normal run
+    # every task is already done.
     try:
         for (chunk_idx, sub_idx, _text), task in zip(chunks, tasks):
             try:
@@ -93,10 +88,6 @@ async def mark_accent(
                 worst_status = resp.status
             if resp.error is not None and first_error is None:
                 first_error = resp.error
-            # Like `error`, `warning` keeps the first chunk's value — chunks
-            # all degrade the same way (e.g. OJAD down), so one suffices.
-            if resp.warning is not None and first_warning is None:
-                first_warning = resp.warning
     finally:
         await cancel_pending(tasks)
 
@@ -104,14 +95,12 @@ async def mark_accent(
         status=worst_status,
         result=merged if merged else None,
         error=first_error,
-        warning=first_warning,
     )
 
 
 @accent_router.post("/MarkAccent/stream/", tags=["MarkAccent"])
 async def mark_accent_stream(
     request: Request,
-    client: httpx.AsyncClient = Depends(get_http_client),
 ) -> StreamingResponse:
     """Stream one NDJSON line per chunk in input order.
 
@@ -135,15 +124,14 @@ async def mark_accent_stream(
             return
         tasks = schedule_chunks(
             chunks,
-            client,
             render_english_furigana=request.render_english_furigana,
             render_katakana_furigana=request.render_katakana_furigana,
             script=request.script,
         )
         # If the client disconnects mid-stream, Starlette throws GeneratorExit
         # into the paused `yield`; the finally then cancels every still-pending
-        # chunk instead of running them to completion against OJAD for output
-        # nobody will read.
+        # chunk instead of running them to completion for output nobody will
+        # read.
         try:
             for (chunk_idx, sub_idx, _text), task in zip(chunks, tasks):
                 try:

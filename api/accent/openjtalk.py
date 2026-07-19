@@ -21,7 +21,6 @@ import re
 import threading
 from typing import Any
 
-import httpx
 import jaconv
 import pyopenjtalk
 
@@ -51,6 +50,17 @@ _KATA_MORA_RE = re.compile(r".[ャュョゃゅょァィゥェォヮ]?")
 # two sequences the same length. `ー` (long-vowel mark, U+30FC) IS a mora
 # and is intentionally kept. Mirrors `align.is_kana_or_kanji`.
 _KATA_BLOCK_PUNCT = frozenset("゠・ヽヾヿ")
+
+
+def warmup() -> None:
+    """Prime the OpenJTalk frontend at process startup.
+
+    The first `pyopenjtalk` frontend call loads the bundled open_jtalk_dic
+    (~23 MB) and initialises the C++ NJD/JPCommon state. Doing it once when
+    the app boots keeps that latency off the first request (see
+    `main.lifespan`).
+    """
+    _tag("テスト")
 
 
 def _accent_markings(text: str) -> list[int]:
@@ -109,7 +119,6 @@ def _tag(text: str) -> tuple[list[str], list[int]]:
 
 async def get_openjtalk_result(
     query_text: str,
-    client: httpx.AsyncClient,  # unused; kept so the call site stays uniform
 ) -> tuple[str, list[dict[str, Any]]]:
     """In-process, fully offline pitch-accent enrichment.
 

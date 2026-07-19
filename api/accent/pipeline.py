@@ -25,10 +25,9 @@ Threads the layers together:
  10. `postprocess.convert_furigana_script` — last pass, rewrites every
      furigana field into the requested output script.
 
-The pitch-accent backend is now the in-process OpenJTalk frontend
-(`openjtalk.py`); any remaining "OJAD" in comments/identifiers below is
-historical (the former backend was an OJAD scrape) — the shared per-mora
-`{text, accent}` contract is unchanged, so the naming was left in place.
+The pitch-accent backend is the in-process OpenJTalk frontend
+(`openjtalk.py`), which fills the per-mora `{text, accent}` contract the
+aligner consumes.
 
 `_build_chunks` + `_schedule_chunks` are shared between the regular
 `/MarkAccent/` (collected) and `/MarkAccent/stream/` (yielded) endpoints
@@ -41,7 +40,6 @@ from __future__ import annotations
 import asyncio
 import logging
 
-import httpx
 import neologdn
 
 from api.accent.align import align_accent
@@ -56,12 +54,13 @@ from api.accent.postprocess import (
     suppress_punct_furigana,
 )
 from api.accent.preprocess import (
+    cap_chunk_length,
     has_japanese,
     restore_number_commas,
     restore_urls,
     restore_x_between_digits,
     split_sentences,
-    strip_acronym_dots_for_ojad,
+    strip_acronym_dots,
     strip_number_commas,
     strip_urls,
     strip_x_between_digits,
@@ -78,7 +77,6 @@ logger = logging.getLogger("api")
 
 async def process_accent_chunk(
     text: str,
-    client: httpx.AsyncClient,
     render_english_furigana: bool = False,
     render_katakana_furigana: bool = False,
     script: str = "hiragana",
@@ -96,12 +94,12 @@ async def process_accent_chunk(
         stripped_text, urls = strip_urls(query_text)
 
         # Strip thousands-grouping commas (`1,234` → `1234`) so fugashi
-        # sees one numeric token and OJAD reads the whole integer as one
+        # sees one numeric token and OpenJTalk reads the whole integer as one
         # phrase; the original comma-formatted surface is reinstated
         # after alignment via `restore_number_commas`.
         stripped_text, number_strips = strip_number_commas(stripped_text)
 
-        # Swap `\d×\d` → `\d/\d` so OJAD reads each number separately
+        # Swap `\d×\d` → `\d/\d` so OpenJTalk reads each number separately
         # instead of merging '19×19' into '1919' (千九百十九). `×` is
         # restored on the surface after alignment via
         # `restore_x_between_digits`.
@@ -109,7 +107,7 @@ async def process_accent_chunk(
 
         # No hiragana/katakana/kanji outside URLs — passthrough the line
         # as a single token. Callers reconstructing the document still
-        # see the chunk in the stream; we just skip the tokeniser + OJAD
+        # see the chunk in the stream; we just skip the tokeniser + OpenJTalk
         # round-trips entirely.
         if not has_japanese(stripped_text):
             return AccentResponse(
@@ -128,9 +126,9 @@ async def process_accent_chunk(
         # Apply furigana overrides BEFORE alignment: many of the overrides
         # (e.g. "4日"→"よっか", "27日"→"にじゅうしちにち") merge a numeric
         # surface with the counter into one token whose furigana matches what
-        # OJAD reads as a single phrase. align_accent's numeric branch
+        # OpenJTalk reads as a single phrase. align_accent's numeric branch
         # otherwise cascades-fails on these inputs because numeric tokens lack
-        # any furigana for OJAD to align against.
+        # any furigana for OpenJTalk to align against.
         # Offload the tokeniser to a worker thread: `tag_local` runs
         # fugashi's CPU-bound C parse against the 1.3 GB UniDic dict. On the
         # event-loop thread it would block concurrent chunks and serialise
@@ -156,15 +154,11 @@ async def process_accent_chunk(
         # the sentence (downstream accents come back all-zero). Strip the `.`
         # for the accent query so the frontend sees `Wifi7`; fugashi keeps the
         # original surface so the acronym-merge preserves `Wifi.7` for display.
-        accent_query_text = strip_acronym_dots_for_ojad(stripped_text)
+        accent_query_text = strip_acronym_dots(stripped_text)
 
         # Pitch-accent enrichment from the in-process OpenJTalk frontend.
-        # Fully offline — no network call, so (unlike the old OJAD scrape) it
-        # has no unavailable path. `warning` stays None; it is kept on the
-        # response below for schema parity with clients that handled the old
-        # OJAD-degradation warning.
-        warning = None
-        _surface, accent_results = await get_openjtalk_result(accent_query_text, client)
+        # Fully offline — no network call, so there is no unavailable path.
+        _surface, accent_results = await get_openjtalk_result(accent_query_text)
 
         final_results = await align_accent(furigana_results, accent_results)
         final_results = apply_accent_overrides(final_results)
@@ -199,7 +193,7 @@ async def process_accent_chunk(
         # script before serialisation. Hiragana is the no-op default.
         final_results = convert_furigana_script(final_results, script)
 
-        return AccentResponse(status=200, result=final_results, warning=warning)
+        return AccentResponse(status=200, result=final_results)
 
     except Exception as e:
         logger.exception(f"Unexpected error occurred: {text}")
@@ -221,6 +215,13 @@ def build_chunks(text: str) -> list[tuple[int, int, str]]:
     inputs give the OpenJTalk frontend a cleaner prosodic phrase to work
     with. Splitting also fans the work out under the semaphore.
 
+    Any chunk still longer than `MAX_CHUNK_CHARS` after sentence splitting
+    (degenerate input with no `。！？．` terminators) is length-split by
+    `cap_chunk_length` — preferring a comma / pause boundary, falling back to a
+    hard cut — so the quadratic alignment DP can't blow up on one unbroken
+    chunk. Each resulting piece gets its own `sub_idx`, so the streaming
+    endpoint's (chunk, subchunk) pairs stay unique and ordered.
+
     Shared by `/MarkAccent/` (collected) and `/MarkAccent/stream/`
     (yielded) so both endpoints emit byte-identical per-chunk results;
     only the delivery shape differs.
@@ -229,14 +230,16 @@ def build_chunks(text: str) -> list[tuple[int, int, str]]:
     for line_idx, line in enumerate(text.split("\n")):
         if not line.strip():
             continue
-        for sub_idx, sentence in enumerate(split_sentences(line)):
-            chunks.append((line_idx, sub_idx, sentence))
+        sub_idx = 0
+        for sentence in split_sentences(line):
+            for piece in cap_chunk_length(sentence):
+                chunks.append((line_idx, sub_idx, piece))
+                sub_idx += 1
     return chunks
 
 
 def schedule_chunks(
     chunks: list[tuple[int, int, str]],
-    client: httpx.AsyncClient,
     render_english_furigana: bool,
     render_katakana_furigana: bool,
     script: str = "hiragana",
@@ -265,7 +268,6 @@ def schedule_chunks(
         async with semaphore:
             return await process_accent_chunk(
                 line,
-                client,
                 render_english_furigana=render_english_furigana,
                 render_katakana_furigana=render_katakana_furigana,
                 script=script,

@@ -66,6 +66,19 @@ def _get_tagger() -> fugashi.Tagger:
     return _tagger
 
 
+def warmup() -> None:
+    """Eagerly build the shared tagger at process startup.
+
+    Constructing `fugashi.Tagger()` loads the ~1.3 GB UniDic dictionary and
+    takes a second or two. Calling this once when the app boots moves that
+    cost off the first request's critical path (see `main.lifespan`). A tiny
+    parse also JITs the tagging path. Safe to call more than once — the
+    tagger is a lock-guarded singleton.
+    """
+    _get_tagger()
+    tag_local("東京")
+
+
 def _none_if_null(value: str | None) -> str | None:
     return None if value in (None, _UNIDIC_NULL) else value
 
@@ -172,7 +185,7 @@ def _flush_decimal_run(buf: list[WordResult]) -> WordResult:
     `てん` (decimal-point reading) along with `ごお`. Visually the `てん`
     morae from `.` end up over the `5`, not the `.`. Merging into one
     `12.5` numeric surface lets the numeric branch free-consume all of
-    OJAD's morae for the decimal as one unit — `12.5` then renders with
+    OpenJTalk's morae for the decimal as one unit — `12.5` then renders with
     a single per-mora ruler covering `じゅうにいてんごお`.
 
     `pos` is set to "名詞" so downstream POS-aware patches (the ます/たい
@@ -263,17 +276,17 @@ def tag_local(text: str) -> list[WordResult]:
         feat = tok.feature
         surface = tok.surface
         # Pick the orthographic kana (`kana`) rather than the phonological
-        # `pron`: UniDic stores 忙しい as `kana=イソガシイ` (matches OJAD's
+        # `pron`: UniDic stores 忙しい as `kana=イソガシイ` (matches OpenJTalk's
         # ortho-kana output) but `pron=イソガシー` (with chōonpu, which
         # would never align). Fall back through pron then surface if kana
         # is missing or null (e.g. punctuation tokens have `kana="*"`).
         kana_kata = _none_if_null(getattr(feat, "kana", None))
         if kana_kata is None:
             kana_kata = _none_if_null(getattr(feat, "pron", None))
-        # UniDic emits empty `kana` for non-CJK symbols (#, %, @ …). OJAD,
+        # UniDic emits empty `kana` for non-CJK symbols (#, %, @ …). OpenJTalk,
         # however, vocalises them (シャープ, パーセント, アットマーク).
         # Without a synthetic reading the aligner's edit-distance branch
-        # rejects the OJAD span and morae leak onto the next kana token.
+        # rejects the OpenJTalk span and morae leak onto the next kana token.
         if kana_kata is None and surface in SYMBOL_READINGS:
             kana_kata = SYMBOL_READINGS[surface]
         reading = jaconv.kata2hira(kana_kata) if kana_kata else surface

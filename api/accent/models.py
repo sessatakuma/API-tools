@@ -11,10 +11,8 @@ the model for in-pipeline use by `apply_accent_patches` but are excluded
 from serialization — clients never need to see them. Strong-mode kernel
 fields are exposed in the response.
 
-The per-mora pitch contour now comes from the in-process OpenJTalk frontend
-(`openjtalk.py`); the "OJAD" wording in the field docstrings below is
-historical (the former backend was an OJAD scrape) and does not change the
-per-mora `accent_marking_type` semantics.
+The per-mora pitch contour comes from the in-process OpenJTalk frontend
+(`openjtalk.py`), which sets `accent_marking_type` per mora.
 """
 
 from __future__ import annotations
@@ -62,7 +60,7 @@ class Request(BaseModel):
 
 class ErrorInfo(BaseModel):
     """Error payload returned in the Response envelope when something
-    upstream fails (OJAD request errors, tokeniser errors, etc.).
+    upstream fails (OpenJTalk request errors, tokeniser errors, etc.).
     """
 
     code: int = Field(description="The error code that follows JSON-RPC 2.0")
@@ -119,12 +117,12 @@ class WordResult(BaseModel):
 
 
 class AccentInfo(BaseModel):
-    """Per-mora pitch annotation produced by OJAD's phrasing module.
+    """Per-mora pitch annotation produced by OpenJTalk's phrasing module.
 
     `accent_marking_type` semantics (see also `api/accent/README.md`):
       - 0 = LOW (or unknown / fallback)
-      - 1 = HIGH plateau (OJAD's `accent_plain` class)
-      - 2 = FALL kernel (pitch drops after this mora; OJAD's `accent_top`)
+      - 1 = HIGH plateau (OpenJTalk's `accent_plain` class)
+      - 2 = FALL kernel (pitch drops after this mora; OpenJTalk's `accent_top`)
     """
 
     furigana: str = Field(description="The furigana of given kana and kanji")
@@ -138,7 +136,7 @@ class WordAccentResult(BaseModel):
     """A single word from the MarkAccent pipeline.
 
     Combines the surface + reading from the local tokeniser with the per-mora
-    pitch contour from OJAD. POS metadata mirrors `WordResult` and is passed
+    pitch contour from OpenJTalk. POS metadata mirrors `WordResult` and is passed
     through `align_accent` so downstream patches (see `apply_accent_patches`
     in `reading_overrides`) can branch on POS / conjugation.
 
@@ -183,11 +181,11 @@ class WordAccentResult(BaseModel):
         default=False,
         description=(
             "True when `lexical_kernel >= 1` (UniDic says this word has a "
-            "kernel) but OJAD's per-mora output for this word's range "
+            "kernel) but OpenJTalk's per-mora output for this word's range "
             "contains no FALL marker — i.e. the kernel was absorbed into a "
-            "larger prosodic phrase by OJAD's connected-speech sandhi. "
+            "larger prosodic phrase by OpenJTalk's connected-speech sandhi. "
             "Useful for callers that want to display per-word lexical "
-            "accent in addition to OJAD's surface contour."
+            "accent in addition to OpenJTalk's surface contour."
         ),
     )
 
@@ -204,9 +202,4 @@ class AccentResponse(BaseModel):
     error: ErrorInfo | None = Field(
         default=None,
         description="An object that describes the details of an error when one occurs",
-    )
-    warning: str | None = Field(
-        default=None,
-        description="A non-fatal warning when results are degraded, e.g. furigana "
-        "returned without pitch accent because OJAD was unavailable",
     )
