@@ -6,7 +6,7 @@ Runs after `align_accent` + `apply_accent_overrides` + `apply_accent_patches`:
     `apply_accent_overrides` rebuilt them with a fallback type-0 accent
     (e.g. bracket-style `(土)` tokens).
   * `flatten_heiban_particle_accent` — zero out the trailing HIGH overlay
-    OJAD assigns to `の / な / は / が` after a heiban noun.
+    OpenJTalk assigns to `の / な / は / が` after a heiban noun.
   * `apply_furigana_toggles` — drop ruby (and, for English, the accent
     list) on pure-English / pure-katakana tokens when the request toggle
     is off.
@@ -158,7 +158,7 @@ def _is_heiban_token(w: WordAccentResult) -> bool:
     return any(a.accent_marking_type == 1 for a in w.accent)
 
 
-# Particles where OJAD's heiban-continuation HIGH overlay adds visual
+# Particles where OpenJTalk's heiban-continuation HIGH overlay adds visual
 # noise without information. Caller preference: render these as flat
 # LOW after a heiban word so the per-mora ruler doesn't stretch a HIGH
 # bar across the noun boundary.
@@ -169,7 +169,7 @@ _HEIBAN_FLATTEN_PARTICLES = frozenset({"の", "な", "は", "が", "を", "に",
 # closing mark carries no spoken kana (already empty-accent after align), so
 # we treat it as transparent and look further back for the heiban predecessor.
 # Sentence-ending punct (。、 etc.) is deliberately NOT in this set — those
-# mark a real prosodic break and the following particle should keep its OJAD
+# mark a real prosodic break and the following particle should keep its OpenJTalk
 # pitch.
 _TRANSPARENT_CLOSE_PUNCT = frozenset(
     {"」", "』", "）", ")", "〉", "》", "】", "]", "〕", "”", "’"}
@@ -181,7 +181,7 @@ def flatten_heiban_particle_accent(
 ) -> list[WordAccentResult]:
     """Zero out the pitch on の / な / は / が / を / に / で following a 平板調 word.
 
-    After a heiban noun (学校, 富士山, 元気 …), OJAD assigns HIGH (1) to
+    After a heiban noun (学校, 富士山, 元気 …), OpenJTalk assigns HIGH (1) to
     the trailing particle to maintain the high plateau. Visually that
     paints the particle with a HIGH overlay that adds noise without
     new contour information. The caller prefers LOW (0) instead.
@@ -189,7 +189,7 @@ def flatten_heiban_particle_accent(
     Scoped to a fixed set of case/topic particles (の, な, は, が, を,
     に, で) — the ones where the heiban-continuation HIGH was reported
     as visual noise. Other particles (へ, と, や, も …) keep their
-    OJAD-derived pitch.
+    OpenJTalk-derived pitch.
 
     Look-back skips closing brackets/quotes (`_TRANSPARENT_CLOSE_PUNCT`)
     so 「柔道」は flattens against 柔道, not against the `」` (which has
@@ -497,7 +497,7 @@ def _convert_one(s: str, script: str) -> str:
     """Convert a kana string to the target script.
 
     `jaconv.kata2hira` normalises mixed-script input first so per-mora
-    furigana that OJAD echoed back as katakana (`ラ`, `イ` for ライター)
+    furigana that OpenJTalk echoed back as katakana (`ラ`, `イ` for ライター)
     end up matching the script the caller asked for, instead of leaking
     through verbatim.
     """
@@ -524,7 +524,7 @@ def convert_furigana_script(
     `furigana`, every `AccentInfo.furigana`, and every `subword[].furigana`.
 
     Even the default `hiragana` runs through here so per-mora furigana
-    that OJAD echoed back as katakana (e.g. `ラ`/`イ` morae on
+    that OpenJTalk echoed back as katakana (e.g. `ラ`/`イ` morae on
     ライター) gets normalised to hiragana — without this pass, the
     per-mora script was inconsistent between katakana-surface and
     kanji-surface tokens.

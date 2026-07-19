@@ -1,12 +1,12 @@
 """Predefined regex override layer + POS-driven accent patches.
 
-Two layers run after the local fugashi tokeniser + OJAD alignment:
+Two layers run after the local fugashi tokeniser + OpenJTalk alignment:
 
-(1) **Regex overrides** — `apply_furigana_overrides` (before OJAD align)
+(1) **Regex overrides** — `apply_furigana_overrides` (before OpenJTalk align)
     and `apply_accent_overrides` (after align). Each entry is a regex
     against the concatenated surface text plus the replacement tokens
     that should appear instead. The same overrides are applied a second
-    time after OJAD alignment, replacing both furigana and accent in
+    time after OpenJTalk alignment, replacing both furigana and accent in
     one go. Patterns accept half-width, full-width, and kanji-numeral
     variants of the same surface, so "3月5日(土)" / "３月５日（土）" /
     "三月五日（土）" all trigger the same overrides.
@@ -623,7 +623,7 @@ _PATCH_EXCEPTIONS: frozenset[str] = frozenset()
 # Conjugation forms where the first-mora FALL rule applies. Polite ます
 # behaves like an atamadaka 2-mora foot in 終止形 (ます → ま↓す) and in
 # 連用形 (まし[た] → ま↓し-た). It does NOT apply in 未然形 — in ません,
-# the kernel falls on せ before the final ん, not on ま. OJAD already
+# the kernel falls on せ before the final ん, not on ま. OpenJTalk already
 # predicts ません correctly, and our patch would un-fix it.
 _FIRST_MORA_FALL_FORMS = ("終止形", "連用形")
 

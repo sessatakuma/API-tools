@@ -1,9 +1,9 @@
-"""User-maintained patch table for OJAD / UniDic misreads.
+"""User-maintained patch table for OpenJTalk / UniDic misreads.
 
 Each entry is a literal-match override: when the concatenated surface
 text contains the key, the matched span is replaced by the listed
 segments. The whole pipeline runs in two passes against the override
-set (`apply_furigana_overrides` before OJAD, `apply_accent_overrides`
+set (`apply_furigana_overrides` before OpenJTalk, `apply_accent_overrides`
 after alignment), so adding an entry here fixes both the displayed
 furigana and the resulting accent contour.
 
@@ -45,7 +45,7 @@ segment's furigana.
 """
 
 USER_PATCHES: dict[str, tuple[tuple[str, str, tuple[int, ...]], ...]] = {
-    # OJAD reads `33m/s` with a stray `みっ` from a sound-change quirk
+    # OpenJTalk reads `33m/s` with a stray `みっ` from a sound-change quirk
     # in its CRF — without the patch, `33` ends up as `さんじゅうみっ`.
     "33m/s": (
         ("33", "さんじゅうさん", (0, 1, 1, 1, 1, 1)),
