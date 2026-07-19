@@ -1,18 +1,18 @@
 """Align local-tokeniser tokens with per-mora accent entries.
 
 The per-mora spans now come from `openjtalk.py` (in-process OpenJTalk); the
-"OJAD" naming below is historical — the aligner is intentionally
+"OpenJTalk" naming below is historical — the aligner is intentionally
 backend-agnostic and only consumes the shared `{text, accent}` per-mora shape.
 
 The DP aligner replaces an earlier greedy implementation that had two fatal
 failure modes: a numeric anchor that over-consumed when the tokeniser and
-OJAD disagreed on a phrase boundary, and a fallback path that advanced
-OJAD by exactly +1 — so a single mismatch cascaded into type-0 fallback
+OpenJTalk disagreed on a phrase boundary, and a fallback path that advanced
+OpenJTalk by exactly +1 — so a single mismatch cascaded into type-0 fallback
 for every downstream token.
 
-`align_accent()` builds a Needleman-Wunsch-style DP over (token, ojad_entry)
+`align_accent()` builds a Needleman-Wunsch-style DP over (token, accent_entry)
 pairs. Each cell `dp[i][j]` holds the minimum total cost to explain tokens
-[0..i) using OJAD entries [0..j). For every (i, j) we try consuming k OJAD
+[0..i) using OpenJTalk entries [0..j). For every (i, j) we try consuming k OpenJTalk
 entries for token i with k ∈ [0, _K_MAX]; the per-token cost depends on
 token shape (punctuation / numeric / readable-symbol compound / kana) and
 uses edit distance over rendaku-folded strings for kana tokens. A bad
@@ -108,9 +108,9 @@ skip_marks = set(string.ascii_lowercase + string.ascii_uppercase)
 def clean_query(query: str) -> str:
     """Strip ASCII letters from `query`.
 
-    OJAD's CRF parser gives better results when Latin alphabet runs are
+    OpenJTalk's CRF parser gives better results when Latin alphabet runs are
     removed before submission. Punctuation is intentionally left in
-    place — OJAD relies on it for phrase boundaries.
+    place — OpenJTalk relies on it for phrase boundaries.
     """
     return "".join(char for char in query if char not in skip_marks)
 
@@ -127,9 +127,9 @@ def is_kana_or_kanji(char: Any) -> bool:
     return False
 
 
-# Local tokeniser returns "dictionary form" furigana (no rendaku), while OJAD
+# Local tokeniser returns "dictionary form" furigana (no rendaku), while OpenJTalk
 # returns the actually pronounced kana (with rendaku/sequential-voicing
-# applied). When the tokeniser says "ふんかん" and OJAD says "ぷんかん", the
+# applied). When the tokeniser says "ふんかん" and OpenJTalk says "ぷんかん", the
 # literal startswith / equality checks would never match and the alignment
 # would cascade-fail. We compare under a normalisation that folds each
 # voiced/half-voiced kana to its voiceless base, so ぷ↔ふ, ば↔は, ご↔こ etc.
@@ -162,20 +162,29 @@ def _split_morae(kana: str) -> list[str]:
 
 # --- DP aligner constants ------------------------------------------------------
 
-_K_MAX = 16  # max OJAD entries one token can consume
+# Max per-mora accent entries a single token may consume in the DP. This is a
+# fan-out / cost bound on the inner `k` loop (DP cost is O(n * m * _K_MAX)), not
+# a backend-specific limit — it applies to whatever engine fills the per-mora
+# `{text, accent}` stream. It must cover the largest span any token legitimately
+# wants: the numeric / compound branches accept up to `max(4, len(surface) * 4)`
+# morae, so 32 covers numbers up to ~8 digits read as one phrase. A token whose
+# reading needs more morae than this spills the remainder onto the next token
+# (rare — only very long unbroken numbers); raising this trades that off against
+# DP cost, which the per-chunk length cap in `preprocess.MAX_CHUNK_CHARS` bounds.
+_K_MAX = 32
 _INF = float("inf")
 _FALLBACK_COST = 3.0  # cost of giving up on a single token (k=0 for kana/numeric)
-_OJAD_PUNCT_TEXTS = {"、", "。", ",", ".", "?", "!", "！", "？"}
+_PUNCT_TEXTS = {"、", "。", ",", ".", "?", "!", "！", "？"}
 
 
 # Substitutions are cheaper than insertions/deletions: a substitution keeps
-# the yahoo↔ojad mora-count alignment intact (the kind of mismatch we
+# the token↔engine mora-count alignment intact (the kind of mismatch we
 # *expect* — rendaku, reading variants like 等→とう/など), while ins/del
 # means the two sources disagree on mora count, which is much less common
 # and almost always a worse alignment. With sub<0.5, the DP correctly
 # prefers a same-length span with two substitutions (cost 0.8) over a
 # shorter span with one deletion (cost 1.0). This breaks the tie that was
-# letting OJAD's `う` from `等→とう` leak forward onto the next token.
+# letting OpenJTalk's `う` from `等→とう` leak forward onto the next token.
 _SUB_COST = 0.4
 
 
@@ -214,9 +223,9 @@ def _is_punct_token(furigana: str, is_numeric: bool) -> bool:
         return False
     # ASCII-letter tokens (e.g. `iPhone`, `Apple` UniDic doesn't recognise)
     # are foreign words, not punctuation. Without this guard they'd be
-    # classified as punct, the DP would refuse their OJAD morae, and
+    # classified as punct, the DP would refuse their OpenJTalk morae, and
     # those morae would leak onto neighboring tokens. They should flow
-    # through the kana path (cost via edit_distance against the OJAD
+    # through the kana path (cost via edit_distance against the OpenJTalk
     # span) so the morae stay anchored — `_apply_furigana_toggles` then
     # wipes them at request time if `render_english_furigana` is False.
     if any("a" <= c <= "z" or "A" <= c <= "Z" for c in furigana):
@@ -233,7 +242,7 @@ def _is_english_compound_surface(surface: str) -> bool:
     `foo_bar1`, `Wifi.7`, `Python3.11`). All such surfaces get the
     same free-consume treatment as numerics in `_match_cost`. Without
     this branch the fused surface would fall through to the kana path
-    and edit-distance against OJAD's kana would push the DP into k=0 /
+    and edit-distance against OpenJTalk's kana would push the DP into k=0 /
     partial-consume splits, leaking morae onto the next Japanese token.
     Mirrors the rule in `postprocess._is_pure_english_surface` so the
     toggle wipe and the aligner agree on which surfaces qualify.
@@ -259,7 +268,7 @@ def _match_cost(
     is_readable_compound: bool = False,
     is_english_compound: bool = False,
 ) -> float:
-    """Cost of letting `token` consume the given OJAD-text span."""
+    """Cost of letting `token` consume the given OpenJTalk-text span."""
     k = len(span_texts)
     concat = "".join(span_texts)
 
@@ -269,10 +278,10 @@ def _match_cost(
         if k == 1:
             stripped = span_texts[0].strip()
             yahoo_stripped = token.furigana.strip()
-            # Free-consume only if the OJAD entry actually matches this
+            # Free-consume only if the OpenJTalk entry actually matches this
             # token's punct (or is empty). Without this, two adjacent
             # punct tokens (e.g. "。" then "\n") could both consume the
-            # single OJAD "。" at zero cost and DP would arbitrarily give
+            # single OpenJTalk "。" at zero cost and DP would arbitrarily give
             # it to the wrong one.
             if not stripped:
                 return 0.0
@@ -283,12 +292,12 @@ def _match_cost(
     if is_english_compound:
         # Surface is `G2P` / `iPhone7` / `Wifi.7` (merged alphanumeric
         # run) — same situation as readable_compound: no kana to align
-        # against, OJAD has spelled the whole acronym out as one phrase.
+        # against, OpenJTalk has spelled the whole acronym out as one phrase.
         # Accept any reasonable span at cost 0 so the morae stay
         # anchored on the merged token; `apply_furigana_toggles` wipes
         # them downstream.
         #
-        # Checked BEFORE the OJAD-punct guard because OJAD sometimes
+        # Checked BEFORE the OpenJTalk-punct guard because OpenJTalk sometimes
         # injects a `。` mid-stream when it normalises a `.` separator
         # (`Wifi.7` → echoed as `Wifi。7`). That punct entry needs to
         # be absorbed by this same merged token rather than blocked —
@@ -297,7 +306,7 @@ def _match_cost(
         # entries back out so they don't surface as ruby when the
         # English toggle is on.
         #
-        # k=0 is also free: OJAD often elides English entirely when
+        # k=0 is also free: OpenJTalk often elides English entirely when
         # it's interleaved with kana (Whisper inside `ふりがなWhisper`,
         # satochin inside `深掘りライターsatochin氏`, URLPLACEHOLDER
         # after strip_urls). Charging _FALLBACK_COST for k=0 made the
@@ -306,26 +315,26 @@ def _match_cost(
         # コメント empty-spanned, ライター missing 'ー', and テスト
         # missing 'テ' in test_0/test_1. Free k=0 keeps spelled-out
         # cases (`G2P` → ジーツーピー) working because forcing those
-        # OJAD morae onto a neighbouring kana token still costs more
+        # OpenJTalk morae onto a neighbouring kana token still costs more
         # edit-distance than letting the english token take them.
         if k == 0:
             return 0.0
-        # Loose upper: ~4 morae per char (covers OJAD's longest letter
+        # Loose upper: ~4 morae per char (covers OpenJTalk's longest letter
         # spellings, e.g. `M` → エム = 2 morae, but headroom for the
         # digit pieces that can spell out to 4 morae like ナナ for 7).
         upper = max(4, len(token.surface) * 4)
         return 0.0 if k <= upper else float(k - upper)
 
-    # Beyond this point the token wants OJAD morae as its reading.
-    # OJAD's punct entries (、 。 , . ! ?) carry no spoken kana and must
+    # Beyond this point the token wants OpenJTalk morae as its reading.
+    # OpenJTalk's punct entries (、 。 , . ! ?) carry no spoken kana and must
     # never bleed into a non-punct token — without this guard `、`
     # leaks onto the next numeric / kana token's accent list (the
     # 「2001|、|0」 symptom from the 量的緩和 paragraph).
-    if any(t in _OJAD_PUNCT_TEXTS for t in span_texts):
+    if any(t in _PUNCT_TEXTS for t in span_texts):
         return _INF
 
     if is_readable_compound:
-        # Surface is `\d+%` or similar; OJAD pronounces the whole thing
+        # Surface is `\d+%` or similar; OpenJTalk pronounces the whole thing
         # as one phrase whose mora count depends on the digit reading
         # plus the symbol's kana. We have no kana to compare against,
         # so accept any plausibly-sized span at cost 0 and only punish
@@ -344,7 +353,7 @@ def _match_cost(
         upper = max(4, len(token.surface) * 4)
         if k > upper:
             return float(k - upper)
-        # Tiebreaker: empty OJAD entries are phrase-break markers
+        # Tiebreaker: empty OpenJTalk entries are phrase-break markers
         # (notably the ones our preprocessing inserts when swapping
         # `\d×\d` → `\d/\d`). They should be absorbed by the adjacent
         # punct token, not stranded inside a numeric span — without
@@ -357,7 +366,7 @@ def _match_cost(
     # Override-synthesized tokens: the regex layer
     # (`reading_overrides.apply_furigana_overrides`) merges spans like
     # `20歳` into a single WordResult with a prescribed `furigana`
-    # (`はたち`) that does NOT match OJAD's reading of the same surface
+    # (`はたち`) that does NOT match OpenJTalk's reading of the same surface
     # (`にじゅっさい`, 5 morae vs はたち's 3). Without a free-consume
     # branch, the DP gives this token just 3 morae and the leftover
     # `さい` cascades onto the next kana token (the `20歳 → の → 私`
@@ -365,14 +374,14 @@ def _match_cost(
     # (`base` and `pos` are both None — `ReplacementToken.build`
     # constructs WordResults without MA metadata), which is the
     # discriminator here. `apply_accent_overrides` rewrites the accent
-    # post-align so whatever marks DP picked up from OJAD are discarded.
+    # post-align so whatever marks DP picked up from OpenJTalk are discarded.
     if getattr(token, "base", None) is None and getattr(token, "pos", None) is None:
         if k == 0:
             return _FALLBACK_COST
         upper = max(4, len(token.surface) * 4 + 4)
         return 0.0 if k <= upper else float(k - upper)
 
-    # Kana / kanji token: compare under rendaku fold. The OJAD-punct
+    # Kana / kanji token: compare under rendaku fold. The OpenJTalk-punct
     # guard above already kicks in for any non-punct token, so by the
     # time we reach the kana branch the span is guaranteed punct-free.
     if k == 0:
@@ -380,16 +389,16 @@ def _match_cost(
     y_norm = _norm(token.furigana)
     o_norm = _norm(concat)
     # Cheap length pre-filter — keeps the DP fast and prevents pathological
-    # "consume 12 OJAD entries to match a 2-mora token" alignments.
+    # "consume 12 OpenJTalk entries to match a 2-mora token" alignments.
     if abs(len(y_norm) - len(o_norm)) > 3:
         return _INF
     return _edit_distance(y_norm, o_norm)
 
 
 def _build_word_result(
-    token: WordResult, ojad_span: list[dict[str, Any]]
+    token: WordResult, accent_span: list[dict[str, Any]]
 ) -> WordAccentResult:
-    """Wrap an aligned (token, OJAD-span) pair into a WordAccentResult."""
+    """Wrap an aligned (token, OpenJTalk-span) pair into a WordAccentResult."""
     token_surface = token.surface
     token_furigana = token.furigana
     is_numeric = bool(NUMERIC_PATTERN.match(token_surface))
@@ -416,7 +425,7 @@ def _build_word_result(
     # furigana + empty accent — the same "skip ruby" signal used by
     # `restore_urls`. Readable compounds (`2%`) skip this exit because
     # their `furigana` mirrors the surface (e.g. "2%") and would
-    # otherwise look like punct here — the OJAD-driven path below
+    # otherwise look like punct here — the OpenJTalk-driven path below
     # rewrites them to the spoken reading.
     if not is_readable_compound and _is_punct_token(token_furigana, is_numeric):
         return WordAccentResult(
@@ -433,7 +442,7 @@ def _build_word_result(
             lexical_kernel_alts=lexical_kernel_alts,
         )
 
-    # Fallback accent payload for paths with no usable OJAD info. Single
+    # Fallback accent payload for paths with no usable OpenJTalk info. Single
     # type-0 entry covering the whole token so downstream overrides and
     # callers still see one AccentInfo per token.
     fallback_accent = [
@@ -444,9 +453,9 @@ def _build_word_result(
         )
     ]
 
-    if not ojad_span:
-        # k=0 path. `kernel_absorbed` stays False — no OJAD span means
-        # "no OJAD info", not "OJAD absorbed the kernel".
+    if not accent_span:
+        # k=0 path. `kernel_absorbed` stays False — no OpenJTalk span means
+        # "no OpenJTalk info", not "OpenJTalk absorbed the kernel".
         return WordAccentResult(
             surface=token_surface,
             furigana=token_furigana,
@@ -461,9 +470,9 @@ def _build_word_result(
             lexical_kernel_alts=lexical_kernel_alts,
         )
 
-    # Drop OJAD entries with empty text (phrase-boundary sentinels) and,
-    # for english-compound tokens, the OJAD-punct entries we let
-    # `_match_cost` absorb at cost 0. Those punct entries are OJAD
+    # Drop OpenJTalk entries with empty text (phrase-boundary sentinels) and,
+    # for english-compound tokens, the OpenJTalk-punct entries we let
+    # `_match_cost` absorb at cost 0. Those punct entries are OpenJTalk
     # artefacts from normalising `.` → `。` mid-acronym (`Wifi.7`); they
     # carry no spoken mora and would surface as a stray `。` in the
     # ruby when `render_english_furigana=True`.
@@ -472,10 +481,10 @@ def _build_word_result(
     )
     if is_english_compound:
         voiced_span = [
-            e for e in ojad_span if e["text"] and e["text"] not in _OJAD_PUNCT_TEXTS
+            e for e in accent_span if e["text"] and e["text"] not in _PUNCT_TEXTS
         ]
     else:
-        voiced_span = [e for e in ojad_span if e["text"]]
+        voiced_span = [e for e in accent_span if e["text"]]
     if not voiced_span:
         return WordAccentResult(
             surface=token_surface,
@@ -520,9 +529,9 @@ def _build_word_result(
             for e in voiced_span
         ]
     # `kernel_absorbed`: UniDic says this word has a kernel (lexical_kernel
-    # >= 1) but OJAD's per-mora output for its range carries no FALL. This
+    # >= 1) but OpenJTalk's per-mora output for its range carries no FALL. This
     # typically happens when the word sits in the medial position of a long
-    # prosodic phrase and OJAD's CRF collapses its kernel into the
+    # prosodic phrase and OpenJTalk's CRF collapses its kernel into the
     # surrounding contour (the 忙しい-inside-お忙しい中 case).
     kernel_absorbed = (
         isinstance(lexical_kernel, int)
@@ -530,7 +539,7 @@ def _build_word_result(
         and not any(a.accent_marking_type == 2 for a in accents)
     )
     # Numerics and readable-symbol compounds (e.g. `2%`) carry no kana
-    # furigana of their own — surface OJAD's reading instead.
+    # furigana of their own — surface OpenJTalk's reading instead.
     display = (
         "".join(e["text"] for e in voiced_span)
         if (is_numeric or is_readable_compound)
@@ -557,23 +566,23 @@ def _fallback_word(token: WordResult) -> WordAccentResult:
 
 
 async def align_accent(
-    furigana_results: list[WordResult], ojad_results: list[dict[str, Any]]
+    furigana_results: list[WordResult], accent_results: list[dict[str, Any]]
 ) -> list[WordAccentResult]:
-    """Align tokens with OJAD per-moji entries via global DP.
+    """Align tokens with OpenJTalk per-mora entries via global DP.
 
     Returns one WordAccentResult per input token. Each token consumes a
-    (possibly empty) contiguous span of OJAD entries; the assignment that
+    (possibly empty) contiguous span of OpenJTalk entries; the assignment that
     minimises total mismatch cost wins.
     """
     n = len(furigana_results)
-    m = len(ojad_results)
+    m = len(accent_results)
 
     if n == 0:
         return []
     if m == 0:
         return [_fallback_word(t) for t in furigana_results]
 
-    # Pre-compute per-token classification and OJAD texts.
+    # Pre-compute per-token classification and OpenJTalk texts.
     token_kinds: list[tuple[bool, bool, bool, bool]] = []
     for t in furigana_results:
         is_num = bool(NUMERIC_PATTERN.match(t.surface))
@@ -592,9 +601,9 @@ async def align_accent(
             (not is_compound) and (not is_eng) and _is_punct_token(t.furigana, is_num)
         )
         token_kinds.append((is_num, is_pct, is_compound, is_eng))
-    ojad_texts = [e["text"] for e in ojad_results]
+    accent_texts = [e["text"] for e in accent_results]
 
-    # dp[i][j] = best cost aligning tokens [0..i) to ojad entries [0..j).
+    # dp[i][j] = best cost aligning tokens [0..i) to accent entries [0..j).
     dp: list[list[float]] = [[_INF] * (m + 1) for _ in range(n + 1)]
     back: list[list[int]] = [[-1] * (m + 1) for _ in range(n + 1)]
     dp[0][0] = 0.0
@@ -610,7 +619,7 @@ async def align_accent(
             for k in range(0, k_limit + 1):
                 cost = _match_cost(
                     token,
-                    ojad_texts[j : j + k],
+                    accent_texts[j : j + k],
                     is_num,
                     is_pct,
                     is_compound,
@@ -623,7 +632,7 @@ async def align_accent(
                     dp[i + 1][j + k] = new_cost
                     back[i + 1][j + k] = j
 
-    # Pick the best terminal state. Prefer fully consuming OJAD; otherwise
+    # Pick the best terminal state. Prefer fully consuming OpenJTalk; otherwise
     # take the cheapest end (trailing empty entries get inherited for free
     # by the previous token's span since their text contributes nothing to
     # edit distance).
@@ -643,7 +652,7 @@ async def align_accent(
         )
         return [_fallback_word(t) for t in furigana_results]
 
-    # Backtrack to recover the OJAD span each token consumed.
+    # Backtrack to recover the OpenJTalk span each token consumed.
     spans: list[tuple[int, int]] = [(0, 0)] * n
     cur_j = best_j
     for i in range(n, 0, -1):
@@ -656,6 +665,6 @@ async def align_accent(
 
     logger.debug("DP alignment cost=%.2f spans=%s", best_cost, spans)
     return [
-        _build_word_result(furigana_results[i], ojad_results[s:e])
+        _build_word_result(furigana_results[i], accent_results[s:e])
         for i, (s, e) in enumerate(spans)
     ]
