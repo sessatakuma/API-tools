@@ -20,8 +20,8 @@ Yahoo MA.
 
 from __future__ import annotations
 
-import functools
 import re
+import threading
 
 import fugashi
 import jaconv
@@ -35,17 +35,35 @@ _UNIDIC_NULL = "*"
 # fugashi-split acronym so they can be glued back together below).
 _ALPHA_ONLY_RE = re.compile(r"^[A-Za-z]+$")
 
+# One process-global MeCab tagger, serialised behind this lock. It guards
+# two things: the lazy singleton init in `_get_tagger` (double-checked so a
+# concurrent first call can't build the 1.3 GB Tagger twice), and every
+# `tagger(text)` parse in `tag_local` — MeCab Taggers are NOT safe for
+# concurrent `parse`, and `tag_local` now runs in worker threads (see the
+# `asyncio.to_thread` call in `pipeline.py`), so multiple chunks can hit
+# the shared tagger at once. Mirrors `openjtalk._OJ_LOCK`.
+_TAGGER_LOCK = threading.Lock()
+_tagger: fugashi.Tagger | None = None
 
-@functools.lru_cache(maxsize=1)
+
 def _get_tagger() -> fugashi.Tagger:
-    """Lazy-instantiate the fugashi tagger.
+    """Lazy-instantiate the shared fugashi tagger (singleton).
 
     Singleton because constructing `fugashi.Tagger()` loads the UniDic
     dictionary (~1.3 GB) and takes a second or two; per-request construction
-    would be wasteful. `lru_cache` makes the lazy init thread-safe — only one
-    `fugashi.Tagger()` is ever built even under concurrent first calls.
+    would be wasteful. The lazy init is guarded by `_TAGGER_LOCK` with a
+    double-checked lock: `tag_local` runs in worker threads
+    (`asyncio.to_thread`), so two chunks can reach a cold `_get_tagger`
+    simultaneously — the lock (not `functools.lru_cache`, which does NOT
+    serialise the wrapped call) is what guarantees only one `fugashi.Tagger()`
+    is ever built.
     """
-    return fugashi.Tagger()
+    global _tagger
+    if _tagger is None:
+        with _TAGGER_LOCK:
+            if _tagger is None:
+                _tagger = fugashi.Tagger()
+    return _tagger
 
 
 def _none_if_null(value: str | None) -> str | None:
@@ -204,7 +222,12 @@ def tag_local(text: str) -> list[WordResult]:
     tagger = _get_tagger()
     # Materialise the fugashi token list once so the bridge logic can
     # peek ahead at `toks[i + 1]` — generators don't support indexing.
-    toks = list(tagger(text))
+    # Hold `_TAGGER_LOCK` only across the C parse (and its materialisation
+    # into a list): concurrent chunks share this one Tagger and MeCab's
+    # `parse` is not thread-safe. The pure-Python acronym-merge loop below
+    # touches no shared C state, so the lock is released once `toks` exists.
+    with _TAGGER_LOCK:
+        toks = list(tagger(text))
     n = len(toks)
     parsed: list[WordResult] = []
     run_buf: list[WordResult] = []

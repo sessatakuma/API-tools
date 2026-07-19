@@ -132,7 +132,7 @@ and sync the project:
 
 ```bash
 uv sync                                        # install deps (requires uv)
-./scripts/download_unidic.sh                    # download UniDic CWJ 2025-12-31 (~1.3GB)
+./scripts/download_unidic.sh                    # UniDic CWJ 2025-12-31 (~700 MB compressed download, ~1.3 GB installed)
 ```
 
 No environment variables or API keys are required.

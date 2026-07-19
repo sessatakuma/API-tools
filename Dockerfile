@@ -33,7 +33,8 @@ RUN /app/.venv/bin/python -c "import pyopenjtalk; pyopenjtalk.extract_fullcontex
 
 # Download and install the UniDic dictionary into the venv so the image is
 # self-contained — the `unidic` pip package ships the loader but not the
-# dicdir, and fugashi.Tagger() fails at runtime without it.
+# dicdir, and fugashi.Tagger() fails at runtime without it. UniDic CWJ is
+# a ~700 MB compressed download that expands to ~1.3 GB installed.
 # Uses scripts/download_unidic.sh so local dev and Docker share the same
 # download logic.  Kept as its own layer (before COPY . .) so app-code
 # edits don't bust the download cache; only re-runs when the script or

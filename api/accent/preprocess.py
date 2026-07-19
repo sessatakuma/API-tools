@@ -210,6 +210,17 @@ def restore_x_between_digits(
     In practice digit-flanked `/` is overwhelmingly used for arithmetic
     or "and" contexts where × is the more common surface, so the
     one-direction mapping is fine.
+
+    KNOWN HAZARD (accepted): the budget is consumed by the FIRST `count`
+    `/` surfaces in token order, not the ones that were actually stripped
+    from `×`. So a chunk that mixes a real `19×19` (stripped to `19/19`,
+    count=1) with a user-written literal `1/2` will mis-restore when the
+    literal appears earlier in token order: the budget lands on `1/2` →
+    `1×2` and the real `19/19` is left as-is. We accept this because a
+    digit-flanked `×` is far more common in real input than a literal
+    digit-flanked `/`, so spending the budget on the wrong surface is the
+    rarer failure. (Fixing it would require threading per-occurrence
+    provenance through tokenisation, which fugashi erases.)
     """
     if count == 0:
         return result

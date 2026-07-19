@@ -25,6 +25,11 @@ Threads the layers together:
  10. `postprocess.convert_furigana_script` — last pass, rewrites every
      furigana field into the requested output script.
 
+The pitch-accent backend is now the in-process OpenJTalk frontend
+(`openjtalk.py`); any remaining "OJAD" in comments/identifiers below is
+historical (the former backend was an OJAD scrape) — the shared per-mora
+`{text, accent}` contract is unchanged, so the naming was left in place.
+
 `_build_chunks` + `_schedule_chunks` are shared between the regular
 `/MarkAccent/` (collected) and `/MarkAccent/stream/` (yielded) endpoints
 so both emit byte-identical per-chunk results; only the delivery shape
@@ -126,7 +131,14 @@ async def process_accent_chunk(
         # OJAD reads as a single phrase. align_accent's numeric branch
         # otherwise cascades-fails on these inputs because numeric tokens lack
         # any furigana for OJAD to align against.
-        raw = tag_local(stripped_text)
+        # Offload the tokeniser to a worker thread: `tag_local` runs
+        # fugashi's CPU-bound C parse against the 1.3 GB UniDic dict. On the
+        # event-loop thread it would block concurrent chunks and serialise
+        # the Semaphore(4) fan-out (same rationale as the OpenJTalk offload
+        # in `get_openjtalk_result`). The shared MeCab Tagger is serialised
+        # behind `tokenizer._TAGGER_LOCK` so concurrent workers can't corrupt
+        # its C state.
+        raw = await asyncio.to_thread(tag_local, stripped_text)
         furigana_results = apply_furigana_overrides(raw)
         if not furigana_results:
             logger.warning("Local tokeniser returned empty token list")

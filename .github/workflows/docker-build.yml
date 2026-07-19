@@ -3,8 +3,13 @@ name: Docker Build Check
 
 # Build the image on PRs (no push) so a broken Dockerfile — most importantly
 # the dict-bake layers that make the runtime self-contained/offline
-# (open_jtalk_dic via pyopenjtalk, and the ~1.3 GB UniDic download in
-# scripts/download_unidic.sh) — fails the PR instead of the release build.
+# (open_jtalk_dic via pyopenjtalk, and the UniDic dict — ~700 MB compressed
+# download, ~1.3 GB installed — from scripts/download_unidic.sh) — fails the
+# PR instead of the release build.
+# The smoke-test step then runs the built image with `--network none` and
+# exercises BOTH baked dictionaries: the OpenJTalk open_jtalk_dic (via
+# pyopenjtalk) AND the fugashi/UniDic dicdir (via the tokeniser). A broken
+# or missing download of either dict fails the gate offline.
 on:  # yamllint disable-line rule:truthy
   pull_request:
     branches: ["main", "dev"]
@@ -49,8 +54,13 @@ jobs:
 
       - name: Smoke-test the accent pipeline in the built image
         run: |
-          # Confirms the baked dictionaries resolve offline: run the
-          # in-process OpenJTalk frontend with no network on the container.
+          # Confirms BOTH baked dictionaries resolve offline, in one
+          # `--network none` container run: the OpenJTalk open_jtalk_dic
+          # (pyopenjtalk.extract_fullcontext) AND the ~1.3 GB fugashi/UniDic
+          # dicdir (api.accent.tokenizer.tag_local). WORKDIR is /app and the
+          # app modules are compiled to .pyc there, so they import directly.
+          # Both run in one `python -c`, so an ImportError / missing-dict on
+          # EITHER check raises and fails the step (and the job).
           docker run --rm --network none \
             api-tools:pr-${{ github.event.pull_request.number || github.run_id }} \
-            python -c "import pyopenjtalk; print(pyopenjtalk.extract_fullcontext('東京')[:1])"
+            python -c "import pyopenjtalk; print(pyopenjtalk.extract_fullcontext('東京')[:1]); from api.accent.tokenizer import tag_local; print(tag_local('東京')[:1])"

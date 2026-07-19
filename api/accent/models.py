@@ -10,6 +10,11 @@ hints (`lexical_kernel`, `lexical_kernel_alts`). The POS fields are kept on
 the model for in-pipeline use by `apply_accent_patches` but are excluded
 from serialization — clients never need to see them. Strong-mode kernel
 fields are exposed in the response.
+
+The per-mora pitch contour now comes from the in-process OpenJTalk frontend
+(`openjtalk.py`); the "OJAD" wording in the field docstrings below is
+historical (the former backend was an OJAD scrape) and does not change the
+per-mora `accent_marking_type` semantics.
 """
 
 from __future__ import annotations

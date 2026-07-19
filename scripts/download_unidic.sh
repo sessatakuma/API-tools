@@ -70,7 +70,7 @@ echo "Download URL:         ${DICT_URL}"
 TMPDIR=$(mktemp -d)
 ZIPFILE="${TMPDIR}/unidic.zip"
 
-echo "Downloading (~700 MB)..."
+echo "Downloading (~700 MB compressed download, ~1.3 GB installed)..."
 curl -fSL --progress-bar -o "$ZIPFILE" "$DICT_URL"
 
 # ── Extract ───────────────────────────────────────────────────────────
