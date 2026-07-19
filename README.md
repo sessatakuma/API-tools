@@ -86,7 +86,7 @@ Field reference:
   ignore this field — the top-level `surface` / `furigana` /
   `accent` carry the whole token regardless.
 - `kernel_absorbed` — UniDic says this word has an accent kernel but
-  OJAD's contour for its range has no FALL. Usually means the word
+  OpenJTalk's contour for its range has no FALL. Usually means the word
   sits inside a longer prosodic phrase whose kernel ended up on a
   neighbouring word; useful as a hint for "this token's pitch may
   be inherited from context".

@@ -48,13 +48,10 @@ across an in-flight semaphore shared between the collected and
 streaming endpoints.
 
 > **Pitch-accent backend.** The contour comes from **in-process OpenJTalk**
-> (`openjtalk.py`, fully offline — no network). This branch ships OpenJTalk as
-> the sole accent engine for commercial use; the earlier OJAD scrape and the
-> MARINE DNN variant were evaluated and dropped (see the `spike/openjtalk-accent`
-> worktree's `docs/openjtalk-vs-ojad-eval.md` and `docs/commercial-deployment.md`).
-> `align.py`'s `_match_cost` quirks below were originally characterised against
-> OJAD's output, but the aligner is backend-agnostic: it consumes the same
-> `{text, accent}` per-mora shape `openjtalk.py` now produces.
+> (`openjtalk.py`, fully offline — no network), the sole accent engine.
+> `align.py`'s `_match_cost` quirks below apply to whatever fills the shared
+> `{text, accent}` per-mora shape: the aligner is backend-agnostic and just
+> consumes the sequence `openjtalk.py` produces.
 
 ## Request toggles (`models.py`)
 
@@ -83,13 +80,13 @@ streaming endpoints.
 | `accent_marking_type` | `int` | See the table below. |
 | `length` | `int` | Number of surface chars this mora covers (multi-char for small kana like `ツァ` or `ぴょ`). |
 
-`accent_marking_type` values mirror OJAD's HTML CSS classes:
+`accent_marking_type` uses this per-mora convention:
 
-| Value | Meaning | OJAD class | Visual |
-|---|---|---|---|
-| `0` | LOW (or unknown / fallback) | (no class) | low pitch |
-| `1` | HIGH plateau | `accent_plain` | high pitch sustain |
-| `2` | FALL kernel | `accent_top` | pitch drops AFTER this mora |
+| Value | Meaning | Visual |
+|---|---|---|
+| `0` | LOW (or unknown / fallback) | low pitch |
+| `1` | HIGH plateau | high pitch sustain |
+| `2` | FALL kernel | pitch drops AFTER this mora |
 
 ### `WordAccentResult` (MarkAccent response)
 
@@ -99,7 +96,7 @@ streaming endpoints.
 | `furigana` | `str` | Full token reading. |
 | `accent` | `list[AccentInfo]` | Per-mora pitch list. |
 | `subword` | `list[WordResult]` | Kanji + kana segmentation (see above). |
-| `kernel_absorbed` | `bool` | UniDic says this word has an accent kernel but OJAD's contour for its range carries no FALL — usually means the word sits in the medial position of a long prosodic phrase and OJAD's CRF collapsed its kernel into the surrounding contour. |
+| `kernel_absorbed` | `bool` | UniDic says this word has an accent kernel but OpenJTalk's contour for its range carries no FALL — usually means the word sits in the medial position of a long prosodic phrase and the frontend's phrasing collapsed its kernel into the surrounding contour. |
 
 ### Accent shape cheat-sheet
 
@@ -123,7 +120,7 @@ The shape of the whole word can be read off the `accent` list:
 | `fullcontext.py` | Shared HTS full-context label parser (`accent_markings_from_labels`) — turns OpenJTalk's per-phoneme labels into the 0/1/2 per-mora marking sequence. |
 | `align.py` | Needleman-Wunsch-style DP that aligns tokens against the engine's morae — `_match_cost`, edit distance, voicing fold, token kind classification. |
 | `reading_overrides.py` | Regex overrides (dates, `N日間`, `20歳→はたち`, weekday `(土)` …) + POS-driven `apply_accent_patches` (ます / たい first-mora-FALL) + compiles `USER_PATCHES`. |
-| `user_patches.py` | **User-maintained** patch table — literal-match overrides for cases where OJAD or UniDic produce the wrong reading. (Pure data; see the dedicated section below.) |
+| `user_patches.py` | **User-maintained** patch table — literal-match overrides for cases where OpenJTalk or UniDic produce the wrong reading. (Pure data; see the dedicated section below.) |
 | `postprocess.py` | Rendering polish: suppress punct / particle furigana, flatten heiban-particle, English / katakana toggles, `split_okurigana`, `convert_furigana_script`. |
 | `pipeline.py` | MarkAccent orchestrator — runs preprocess → tokenizer → overrides → openjtalk → align → patches → postprocess → restore → script convert. Provides the shared `build_chunks` / `schedule_chunks`. |
 | `routes.py` | FastAPI router + the two endpoint handlers (collected and streaming). |
@@ -142,9 +139,9 @@ routes.py  →  pipeline.py  →  align.py, openjtalk.py → fullcontext.py,
 ## Alignment algorithm (`align.py`)
 
 `align_accent()` runs a Needleman-Wunsch-style DP over the (token,
-OJAD entry) lattice. `dp[i][j]` is the lowest total cost of aligning
-tokens `[0..i)` to OJAD entries `[0..j)`. At each `(i, j)` the inner
-loop tries letting token `i` consume `k ∈ [0, _K_MAX]` OJAD entries;
+OpenJTalk entry) lattice. `dp[i][j]` is the lowest total cost of aligning
+tokens `[0..i)` to OpenJTalk entries `[0..j)`. At each `(i, j)` the inner
+loop tries letting token `i` consume `k ∈ [0, _K_MAX]` OpenJTalk entries;
 the per-token cost comes from `_match_cost`.
 
 Cost branches, in the order `_match_cost` checks them:
@@ -152,13 +149,13 @@ Cost branches, in the order `_match_cost` checks them:
 - **Punctuation token** — `k=0` is cost 0, `k=1` matching the same
   punct char is cost 0, everything else is `_INF`.
 - **English-compound** (letters / digits / `-_.`) — `k=0` is cost
-  **0** (OJAD frequently elides English entirely; e.g. it returns
+  **0** (OpenJTalk frequently elides English entirely; e.g. it returns
   only the 4 morae of `ふりがな` for `ふりがなWhisper`). `k≥1` is
   cost 0 up to `max(4, len*4)` with a linear over-cap penalty.
-  Checked BEFORE the punct guard because OJAD sometimes injects a
+  Checked BEFORE the punct guard because OpenJTalk sometimes injects a
   mid-stream `。` when normalising `Wifi.7` → `Wifi。7`; that
   artefact has to be absorbed by the merged token.
-- **OJAD-punct guard** — for everything below this point, an OJAD
+- **OpenJTalk-punct guard** — for everything below this point, an OpenJTalk
   span containing `、 。 , .` etc. is rejected with `_INF`, blocking
   the leak of punct morae onto kana neighbours.
 - **Readable-compound** (e.g. `2%` if synthesised upstream) — same
@@ -166,14 +163,14 @@ Cost branches, in the order `_match_cost` checks them:
   accommodate the symbol's spoken reading.
 - **Numeric token** — accepts `k ∈ [1, max(4, len*4)]` at cost 0,
   linear penalty beyond. A 0.01 tiebreaker on span-internal empty
-  OJAD entries keeps `19×19` from being sliced as 1+7.
+  OpenJTalk entries keeps `19×19` from being sliced as 1+7.
 - **Synthesized token** (override-merged, both `base` and `pos` are
   None) — `20歳→はたち` style merges have a prescribed `furigana`
-  whose mora count usually doesn't match OJAD's reading of the
+  whose mora count usually doesn't match OpenJTalk's reading of the
   underlying surface (`にじゅっさい`). Free-consume like
-  readable_compound so OJAD morae land on this token rather than
+  readable_compound so OpenJTalk morae land on this token rather than
   cascading onto a kana neighbour. `apply_accent_overrides` rewrites
-  the accent post-align, so the marks DP picked up from OJAD are
+  the accent post-align, so the marks DP picked up from OpenJTalk are
   discarded anyway.
 - **Kana / kanji token** — `_edit_distance` over rendaku-folded
   strings (`sub=0.4`, `ins/del=1.0`), gated by a length pre-filter
@@ -183,11 +180,11 @@ Cost branches, in the order `_match_cost` checks them:
 comparison to absorb rendaku / sequential voicing (`が↔か`, `ぷ↔ふ`,
 …).
 
-`_build_word_result` turns each (token, OJAD span) pair into a
+`_build_word_result` turns each (token, OpenJTalk span) pair into a
 `WordAccentResult` and stamps the three strong-mode fields
 (`lexical_kernel`, `lexical_kernel_alts`, `kernel_absorbed`).
 Pure-punct tokens emit empty `furigana` + empty `accent`;
-numeric / readable-compound use the OJAD span to synthesise the
+numeric / readable-compound use the OpenJTalk span to synthesise the
 displayed furigana.
 
 ## Surface overrides + POS patches (`reading_overrides.py`)
@@ -201,10 +198,10 @@ Two layers run outside the DP aligner:
 (pattern, replacements, description, pos_match=None)`:
 
 - `apply_furigana_overrides(words: list[WordResult])` runs **before**
-  OJAD alignment to merge spans like `4日`, `27日`, `1日間`, `20歳`
+  OpenJTalk alignment to merge spans like `4日`, `27日`, `1日間`, `20歳`
   into single tokens with the correct reading.
 - `apply_accent_overrides(words: list[WordAccentResult])` runs
-  **after** OJAD alignment and rewrites both furigana and accent in
+  **after** OpenJTalk alignment and rewrites both furigana and accent in
   one pass.
 - Patterns use the not-numeric lookbehind / lookahead built on
   `_DIGIT_CLASS = \d一二三四五六七八九十百千` so `11日` isn't
@@ -232,7 +229,7 @@ auto-reject them and the two layers compose safely.
 
 ## User patches (`user_patches.py`)
 
-Pure data file for cases where OJAD or UniDic produce a wrong reading
+Pure data file for cases where OpenJTalk or UniDic produce a wrong reading
 that we want to override locally without changing the upstream.
 
 Schema:
@@ -291,7 +288,7 @@ To add an entry:
 
 1. `flatten_heiban_particle_accent` — collapses the trailing
    `の/な/は/が` particle's accent to all-LOW after a 平板 noun so
-   OJAD's heiban-continuation HIGH overlay doesn't leak across the
+   OpenJTalk's heiban-continuation HIGH overlay doesn't leak across the
    noun→particle boundary.
 2. `suppress_punct_furigana` — clears `furigana` and `accent` on
    pure-punct tokens. Surfaces present in `SYMBOL_READINGS` (`#`,
@@ -319,7 +316,7 @@ To add an entry:
 7. `convert_furigana_script` — rewrites every furigana field
    (top-level, per-mora, subword) into the requested `script`.
    Even the default `"hiragana"` runs through here so per-mora
-   morae that OJAD echoed back as katakana (`ラ`, `イ` on
+   morae that OpenJTalk echoed back as katakana (`ラ`, `イ` on
    `ライター`) get normalised to hiragana — without this pass the
    per-mora script was inconsistent between katakana-surface and
    kanji-surface tokens.
@@ -348,7 +345,7 @@ dictionary loaded between requests. Field mapping:
 
 UniDic uses `*` as a null marker; `_none_if_null` maps every `*` to
 `None`. We prefer `feat.kana` (orthographic kana — `イソガシイ`,
-which aligns to OJAD's output) over `feat.pron` (phonological —
+which aligns to OpenJTalk's output) over `feat.pron` (phonological —
 `イソガシー` with chōonpu, which never aligns).
 
 The five POS metadata fields (`base` / `pos` / `pos1` /
