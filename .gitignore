@@ -215,12 +215,14 @@ __marimo__/
 # Streamlit
 .streamlit/secrets.toml
 
-# Secrest files
+# Secret files
 secret*
 
+# Local data / generated output
 data/
 output/
 
+# AI assistant local config (not shared)
 CLAUDE.md
 AGENTS.md
 .claude
