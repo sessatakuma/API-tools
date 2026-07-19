@@ -54,13 +54,19 @@ jobs:
 
       - name: Smoke-test the accent pipeline in the built image
         run: |
-          # Confirms BOTH baked dictionaries resolve offline, in one
-          # `--network none` container run: the OpenJTalk open_jtalk_dic
-          # (pyopenjtalk.extract_fullcontext) AND the ~1.3 GB fugashi/UniDic
-          # dicdir (api.accent.tokenizer.tag_local). WORKDIR is /app and the
-          # app modules are compiled to .pyc there, so they import directly.
-          # Both run in one `python -c`, so an ImportError / missing-dict on
-          # EITHER check raises and fails the step (and the job).
-          docker run --rm --network none \
+          # Confirms BOTH baked dictionaries resolve offline, in one container
+          # run: the OpenJTalk open_jtalk_dic (pyopenjtalk.extract_fullcontext)
+          # AND the ~1.3 GB fugashi/UniDic dicdir (api.accent.tokenizer.
+          # tag_local). WORKDIR is /app and the app modules are compiled to .pyc
+          # there, so they import directly. Both run in one `python -c`, so an
+          # ImportError / missing-dict on EITHER check raises and fails the job.
+          #
+          # Flags mirror the production hardening in compose.deploy.yml so a
+          # regression that needs the network or a writable rootfs fails here:
+          #   --network none    offline (both dicts must be baked in)
+          #   --read-only       read-only rootfs (no runtime disk writes)
+          #   --tmpfs /tmp      the one writable path the runtime is allowed
+          docker run --rm --network none --read-only --tmpfs /tmp \
+            -e PYTHONDONTWRITEBYTECODE=1 \
             api-tools:pr-${{ github.event.pull_request.number || github.run_id }} \
             python -c "import pyopenjtalk; print(pyopenjtalk.extract_fullcontext('東京')[:1]); from api.accent.tokenizer import tag_local; print(tag_local('東京')[:1])"

@@ -65,6 +65,12 @@ COPY --from=builder /app/api /app/api
 # Set PATH to use venv binaries
 ENV PATH="/app/.venv/bin:$PATH"
 ENV PYTHONUNBUFFERED=1
+# Don't attempt to write .pyc caches at runtime — app code is already compiled
+# to .pyc in the builder, and this lets the container run with a read-only
+# rootfs (see compose.deploy.yml) without Python tripping on cache writes.
+ENV PYTHONDONTWRITEBYTECODE=1
+# Local timezone so log timestamps match the deployment (tzdata ships in slim).
+ENV TZ=Asia/Taipei
 
 EXPOSE 8000
 
