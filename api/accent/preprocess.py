@@ -6,26 +6,33 @@ the text
 with a `_restore_*` pass that walks the aligned results to put the
 original surfaces back.
 
-  * **URLs** (`_strip_urls` / `_restore_urls`) — swap each URL for one
-    fixed placeholder so the alignment DP isn't dragged off-rail by
-    Latin punctuation runs.
+  * **URLs** (`_strip_urls` / `_restore_urls`) — swap each URL for a
+    placeholder so the alignment DP isn't dragged off-rail by Latin runs.
   * **Western-grouped thousands** (`_strip_number_commas` /
     `_restore_number_commas`) — `1,234` → `1234` so OpenJTalk reads the
     whole integer as one phrase.
   * **× between digits** (`_strip_x_between_digits` /
-    `_restore_x_between_digits`) — `19×19` → `19/19` so OpenJTalk splits the
-    reading instead of merging into `1919`.
+    `_restore_x_between_digits`) — `19×19` → `19と19` so OpenJTalk emits a
+    spoken boundary instead of merging the numbers into `1919`.
 
-`_has_japanese` is the early-exit gate for the pipeline: a chunk with
-no kana / kanji is echoed back verbatim without hitting OpenJTalk.
+`has_japanese` contributes to the pipeline's early-exit gate; digits, spoken
+symbols, and requested English readings still run through OpenJTalk.
 """
 
 from __future__ import annotations
 
 import logging
 import re
+from bisect import bisect_left
+
+import neologdn
 
 from api.accent.models import AccentInfo, WordAccentResult
+from api.accent.surface_rewrites import (
+    SurfaceRewrite,
+    restore_rewrites,
+    rewrite_matches,
+)
 
 logger = logging.getLogger("api")
 
@@ -53,50 +60,25 @@ def has_japanese(text: str) -> bool:
 # produces only noise for Latin punctuation runs, and the local tokeniser
 # can fragment a URL across several alphabet/symbol tokens — both drag
 # the alignment DP off-rail for the surrounding Japanese. We swap each
-# URL for one fixed-string placeholder (which the tokeniser keeps as a
-# single "alphabet" word), run the pipeline, then walk the result and
-# restore the originals in order.
+# URL for one placeholder (which the tokeniser keeps as a single "alphabet"
+# word), run the pipeline, then restore the exact recorded output span.
 # URL body stops at whitespace, any Japanese char (so `…はhttps://x.jp/aです`
 # strips just the URL, leaving `です` to be processed), or common quoting
 # punctuation `,()<>[]"'` (so `(https://x.jp)` strips just the URL).
 _URL_RE = re.compile(r"https?://[^\s　-鿿,()<>\[\]\"']+")
-_URL_PLACEHOLDER = "URLPLACEHOLDER"
+_URL_PLACEHOLDER = "「URLPLACEHOLDER」"
 
 
-def strip_urls(text: str) -> tuple[str, list[str]]:
-    """Replace each URL with `_URL_PLACEHOLDER`, returning URLs in order."""
-    urls: list[str] = []
-
-    def repl(m: "re.Match[str]") -> str:
-        urls.append(m.group(0))
-        return _URL_PLACEHOLDER
-
-    return _URL_RE.sub(repl, text), urls
+def strip_urls(text: str) -> tuple[str, list[SurfaceRewrite]]:
+    """Replace URLs and retain their exact output spans for restoration."""
+    return rewrite_matches(text, _URL_RE, lambda _match: _URL_PLACEHOLDER)
 
 
 def restore_urls(
-    result: list[WordAccentResult], urls: list[str]
+    result: list[WordAccentResult], rewrites: list[SurfaceRewrite]
 ) -> list[WordAccentResult]:
     """Swap placeholder tokens in `result` back to their original URLs."""
-    if not urls:
-        return result
-    it = iter(urls)
-    out: list[WordAccentResult] = []
-    for w in result:
-        if w.surface == _URL_PLACEHOLDER:
-            url = next(it, None)
-            if url is None:
-                # Placeholder count exceeded URL count: leave the token
-                # untouched. Indicates a tokenisation surprise; the
-                # output is still readable.
-                out.append(w)
-                continue
-            out.append(
-                WordAccentResult(surface=url, furigana=url, accent=[], subword=[])
-            )
-        else:
-            out.append(w)
-    return out
+    return restore_rewrites(result, rewrites, lambda _rewrite: "")
 
 
 # Western-style grouped numbers: `1,234`, `1,234,567`, `12,345.67`. The
@@ -106,154 +88,92 @@ def restore_urls(
 _NUMERIC_COMMA_RE = re.compile(r"\d{1,3}(?:,\d{3})+(?:\.\d+)?")
 
 
-def strip_number_commas(text: str) -> tuple[str, list[tuple[str, str]]]:
+def strip_number_commas(text: str) -> tuple[str, list[SurfaceRewrite]]:
     """Strip commas from western-grouped numbers in `text`.
 
-    Returns `(cleaned, [(stripped_form, original_form), ...])` where each
-    pair records a `1,234` → `1234` rewrite in order of appearance. After
+    Returns the cleaned text and offset-tagged `1,234` → `1234` rewrites. After
     pipeline alignment, `restore_number_commas` swaps the surfaces back.
     fugashi splits `1,234` into three tokens (digit / `,` / digit) and the
     DP can't easily reassemble them; doing the splice at the text level
     lets the merged digit string flow as one numeric token through OpenJTalk,
     which then reads it as a single integer (せんにひゃくさんじゅうよん).
     """
-    strips: list[tuple[str, str]] = []
-
-    def repl(m: "re.Match[str]") -> str:
-        original = m.group(0)
-        stripped = original.replace(",", "")
-        strips.append((stripped, original))
-        return stripped
-
-    return _NUMERIC_COMMA_RE.sub(repl, text), strips
+    return rewrite_matches(
+        text, _NUMERIC_COMMA_RE, lambda match: match.group(0).replace(",", "")
+    )
 
 
 def restore_number_commas(
-    result: list[WordAccentResult], strips: list[tuple[str, str]]
+    result: list[WordAccentResult], rewrites: list[SurfaceRewrite]
 ) -> list[WordAccentResult]:
     """Walk `result` in order, restoring `1,234`-style surfaces.
 
-    Matches a token whose surface equals the next pending stripped form
-    and rewrites its surface back to the original (commas intact). The
+    Rewrites only the recorded output span back to the original comma form. The
     OpenJTalk-derived furigana / accent payload is left untouched — those
     were produced from the cleaned `1234` form and remain correct as the
     spoken reading.
     """
-    if not strips:
-        return result
-    pending = iter(strips)
-    cur = next(pending, None)
-    out: list[WordAccentResult] = []
-    for w in result:
-        if cur is not None and w.surface == cur[0]:
-            out.append(
-                WordAccentResult(
-                    surface=cur[1],
-                    furigana=w.furigana,
-                    accent=w.accent,
-                    subword=w.subword,
-                    base=w.base,
-                    pos=w.pos,
-                    pos1=w.pos1,
-                    conjugation_type=w.conjugation_type,
-                    conjugation_form=w.conjugation_form,
-                    lexical_kernel=w.lexical_kernel,
-                    lexical_kernel_alts=w.lexical_kernel_alts,
-                    kernel_absorbed=w.kernel_absorbed,
-                )
-            )
-            cur = next(pending, None)
-        else:
-            out.append(w)
-    if cur is not None:
-        # An override merged the numeric surface into a kanji-counter token
-        # (e.g. `1234` + `円` → `1234円` with a custom furigana); we lose
-        # the chance to restore the comma. Logging instead of failing
-        # because the user still sees the right reading; only the
-        # comma-formatted surface is missing.
-        logger.warning(
-            "Number-comma restore: %d strip(s) unmatched (first=%r)",
-            sum(1 for _ in pending) + 1,
-            cur,
-        )
-    return out
+    return restore_rewrites(result, rewrites)
 
 
 # `\d×\d` (and `\d × \d` with spaces) gets merged by OpenJTalk's phrasing
-# module into one number: `19×19` reads as せん きゅう ひゃく じゅう
-# きゅう (= 1919) instead of two じゅう きゅう. Swap × → / for the
-# OpenJTalk/fugashi pass; `/` is one of the few separators OpenJTalk treats as a
-# phrase break without inserting any spoken kana. The original `×` is
-# restored on the surface after alignment.
+# module into one number. Swap × → と for the OpenJTalk/fugashi pass so the
+# connector anchors both numeric spans; restore `×` with empty ruby afterward.
 _X_BETWEEN_DIGITS_RE = re.compile(r"(?<=\d)\s*[×✕✖]\s*(?=\d)")
 
 
-def strip_x_between_digits(text: str) -> tuple[str, int]:
-    """Replace `\\d × \\d` with `\\d/\\d` so OpenJTalk splits the reading.
+def strip_x_between_digits(text: str) -> tuple[str, list[SurfaceRewrite]]:
+    """Replace `\\d × \\d` with `\\dと\\d` so OpenJTalk splits the reading.
 
-    Returns `(cleaned, count)`. `count` is the number of substitutions
-    so `restore_x_between_digits` knows how many `/` surfaces to swap
-    back to `×`.
+    Returns the cleaned text and exact spans that must be restored to `×`.
     """
-    cleaned, count = _X_BETWEEN_DIGITS_RE.subn("/", text)
-    return cleaned, count
+    cleaned, rewrites = rewrite_matches(text, _X_BETWEEN_DIGITS_RE, lambda _match: "と")
+    return cleaned, [
+        SurfaceRewrite(
+            start=rewrite.start,
+            replacement=rewrite.replacement,
+            original=rewrite.original,
+        )
+        for rewrite in rewrites
+    ]
+
+
+def normalize_and_strip_x_between_digits(
+    text: str,
+) -> tuple[str, list[SurfaceRewrite]]:
+    placeholder = "\ue000"
+    while placeholder in text:
+        placeholder += "\ue000"
+
+    originals: list[str] = []
+
+    def protect(match: re.Match[str]) -> str:
+        originals.append(match.group(0))
+        return placeholder
+
+    protected = _X_BETWEEN_DIGITS_RE.sub(protect, text)
+    normalized = neologdn.normalize(protected, tilde="normalize")
+    placeholder_pattern = re.compile(re.escape(placeholder))
+    cleaned, rewrites = rewrite_matches(
+        normalized,
+        placeholder_pattern,
+        lambda _match: "と",
+    )
+    return cleaned, [
+        SurfaceRewrite(
+            start=rewrite.start,
+            replacement=rewrite.replacement,
+            original=original,
+        )
+        for rewrite, original in zip(rewrites, originals, strict=True)
+    ]
 
 
 def restore_x_between_digits(
-    result: list[WordAccentResult], count: int
+    result: list[WordAccentResult], rewrites: list[SurfaceRewrite]
 ) -> list[WordAccentResult]:
-    """Swap `/` surfaces back to `×`, in order, up to `count` times.
-
-    Matches each `/` token left-to-right against the pending substitution
-    budget. We don't track which exact `/` was a stripped × — there's no
-    way to do that after fugashi has already tokenised — so any literal
-    `/` the user wrote between two digits will get rewritten back to ×.
-    In practice digit-flanked `/` is overwhelmingly used for arithmetic
-    or "and" contexts where × is the more common surface, so the
-    one-direction mapping is fine.
-
-    KNOWN HAZARD (accepted): the budget is consumed by the FIRST `count`
-    `/` surfaces in token order, not the ones that were actually stripped
-    from `×`. So a chunk that mixes a real `19×19` (stripped to `19/19`,
-    count=1) with a user-written literal `1/2` will mis-restore when the
-    literal appears earlier in token order: the budget lands on `1/2` →
-    `1×2` and the real `19/19` is left as-is. We accept this because a
-    digit-flanked `×` is far more common in real input than a literal
-    digit-flanked `/`, so spending the budget on the wrong surface is the
-    rarer failure. (Fixing it would require threading per-occurrence
-    provenance through tokenisation, which fugashi erases.)
-    """
-    if count == 0:
-        return result
-    remaining = count
-    out: list[WordAccentResult] = []
-    for w in result:
-        if remaining > 0 and w.surface == "/":
-            out.append(
-                WordAccentResult(
-                    surface="×",
-                    furigana=w.furigana,
-                    accent=w.accent,
-                    subword=w.subword,
-                    base=w.base,
-                    pos=w.pos,
-                    pos1=w.pos1,
-                    conjugation_type=w.conjugation_type,
-                    conjugation_form=w.conjugation_form,
-                    lexical_kernel=w.lexical_kernel,
-                    lexical_kernel_alts=w.lexical_kernel_alts,
-                    kernel_absorbed=w.kernel_absorbed,
-                )
-            )
-            remaining -= 1
-        else:
-            out.append(w)
-    if remaining > 0:
-        logger.warning(
-            "x-between-digits restore: %d substitution(s) unmatched",
-            remaining,
-        )
-    return out
+    """Restore only `と` spans that originated from multiplication signs."""
+    return restore_rewrites(result, rewrites, lambda _rewrite: "")
 
 
 # `.` between an ASCII letter and an alphanumeric (or between alphanumeric
@@ -305,7 +225,7 @@ def split_sentences(line: str) -> list[str]:
     streaming endpoint can't parallelise within a `\\n`-delimited chunk.
     Splitting on full-width sentence terminators fixes both: each sentence
     is short enough for OpenJTalk to handle reliably, and they fan out across
-    the in-flight Semaphore.
+    the four-task sliding window.
     """
     return [s for s in _SENTENCE_SPLIT_RE.split(line) if s.strip()]
 
@@ -334,7 +254,7 @@ _SOFT_BREAK_CHARS = frozenset("、，,・：:；;　 ")
 _MIN_CHUNK_FILL = MAX_CHUNK_CHARS // 2
 
 
-def cap_chunk_length(chunk: str) -> list[str]:
+def cap_chunk_length(chunk: str, token_boundaries: set[int] | None = None) -> list[str]:
     """Split an oversized chunk into ≤ `MAX_CHUNK_CHARS` pieces, in order.
 
     Returns `[chunk]` unchanged when it already fits. Only degenerate,
@@ -348,17 +268,33 @@ def cap_chunk_length(chunk: str) -> list[str]:
     if len(chunk) <= MAX_CHUNK_CHARS:
         return [chunk]
     pieces: list[str] = []
-    rest = chunk
-    while len(rest) > MAX_CHUNK_CHARS:
-        cut = MAX_CHUNK_CHARS  # hard-cut fallback
-        for i in range(MAX_CHUNK_CHARS - 1, _MIN_CHUNK_FILL - 1, -1):
-            if rest[i] in _SOFT_BREAK_CHARS:
-                cut = i + 1  # keep the pause mark with the left piece
+    ordered_boundaries = sorted(token_boundaries or ())
+    start = 0
+    while len(chunk) - start > MAX_CHUNK_CHARS:
+        window_end = start + MAX_CHUNK_CHARS
+        minimum_cut = start + _MIN_CHUNK_FILL
+        cut = window_end
+        for index in range(window_end - 1, minimum_cut - 1, -1):
+            if chunk[index] in _SOFT_BREAK_CHARS:
+                cut = index + 1
                 break
-        pieces.append(rest[:cut])
-        rest = rest[cut:]
-    if rest:
-        pieces.append(rest)
+        if cut == window_end and ordered_boundaries:
+            boundary_index = bisect_left(ordered_boundaries, window_end) - 1
+            if boundary_index >= 0 and ordered_boundaries[boundary_index] > start:
+                cut = ordered_boundaries[boundary_index]
+        if cut == window_end and not ordered_boundaries:
+            for index in range(window_end, minimum_cut, -1):
+                left = ord(chunk[index - 1])
+                right = ord(chunk[index])
+                right_is_kanji = 0x3400 <= right <= 0x9FFF
+                left_is_kana = 0x3040 <= left <= 0x30FF
+                if left_is_kana and right_is_kanji:
+                    cut = index
+                    break
+        pieces.append(chunk[start:cut])
+        start = cut
+    if start < len(chunk):
+        pieces.append(chunk[start:])
     return pieces
 
 
@@ -368,6 +304,37 @@ def cap_chunk_length(chunk: str) -> list[str]:
 # token so OpenJTalk's multi-mora reading lands on the symbol rather than
 # leaking onto the preceding digits.
 READABLE_SYMBOLS = {"%", "％", "℃", "°", "$", "＄", "¥", "￥", "€"}
+
+_NUMERIC_UNIT_BODY = (
+    r"-?\d+(?:\.\d+)?(?:ghz|khz|mhz|km|kg|mg|mm|cm|ml|kw|mw|kv|ma|ms|"
+    r"hz|db|nm|m|g|l|w|v|a|s|h)"
+)
+NUMERIC_UNIT_RE = re.compile(rf"^{_NUMERIC_UNIT_BODY}$", re.IGNORECASE)
+_NUMERIC_UNIT_TEXT_RE = re.compile(_NUMERIC_UNIT_BODY, re.IGNORECASE)
+
+
+def clean_hidden_english(text: str) -> str:
+    parts: list[str] = []
+    cursor = 0
+    for match in _NUMERIC_UNIT_TEXT_RE.finditer(text):
+        parts.append(
+            "".join(
+                char
+                for char in text[cursor : match.start()]
+                if not ("a" <= char <= "z" or "A" <= char <= "Z")
+            )
+        )
+        parts.append(match.group(0))
+        cursor = match.end()
+    parts.append(
+        "".join(
+            char
+            for char in text[cursor:]
+            if not ("a" <= char <= "z" or "A" <= char <= "Z")
+        )
+    )
+    return "".join(parts)
+
 
 # Standalone-symbol → katakana reading. OpenJTalk spells these out as multi-mora
 # katakana when they appear mid-text (`#病` → シャープびょう). UniDic's
