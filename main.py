@@ -18,6 +18,7 @@ from api import dict_query, sentence_query, usage_query
 from api.accent import accent_router
 from api.accent.openjtalk import warmup as warmup_openjtalk
 from api.accent.tokenizer import warmup as warmup_tokenizer
+from api.request_body_limit import MAX_REQUEST_BODY_BYTES, RequestBodyLimitMiddleware
 
 logger = logging.getLogger("api")
 
@@ -54,6 +55,10 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
 
 app = FastAPI(lifespan=lifespan)
+app.add_middleware(
+    RequestBodyLimitMiddleware,
+    max_body_bytes=MAX_REQUEST_BODY_BYTES,
+)
 
 # Include routers from different modules
 app.include_router(accent_router, prefix="/api")

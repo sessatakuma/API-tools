@@ -21,11 +21,13 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
+MAX_TEXT_CHARS = 40_000
+
 
 class Request(BaseModel):
     """Request body for both /MarkAccent/ and /MarkAccent/stream/."""
 
-    text: str = Field(description="The text to query")
+    text: str = Field(max_length=MAX_TEXT_CHARS, description="The text to query")
     render_english_furigana: bool = Field(
         default=False,
         description=(

@@ -5,8 +5,8 @@ Two endpoints share the same chunked pipeline (`pipeline.build_chunks` +
 
   - `POST /api/MarkAccent/` collects all per-chunk results into one
     `AccentResponse`.
-  - `POST /api/MarkAccent/stream/` yields one NDJSON line per chunk as
-    soon as it finishes.
+  - `POST /api/MarkAccent/stream/` yields one NDJSON line per chunk in
+    input order.
 
 The MarkFurigana endpoint that lived in this package previously was
 removed in the local-UniDic migration — the standalone Yahoo Furigana
@@ -16,17 +16,23 @@ tokenisation can use `tokenizer.tag_local`.
 
 from __future__ import annotations
 
+import asyncio  # noqa: F401  # noqa: ANYIO_OK
 import json
 import logging
+import threading
 from typing import Any, AsyncIterator
 
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
+from starlette.types import Receive, Scope, Send
 
+from api.accent.chunking import MAX_CHUNKS_PER_REQUEST, build_chunks, schedule_chunks
 from api.accent.models import AccentResponse, ErrorInfo, Request, WordAccentResult
-from api.accent.pipeline import build_chunks, cancel_pending, schedule_chunks
 
 logger = logging.getLogger("api")
+MAX_ACTIVE_ACCENT_REQUESTS = 4
+ACCENT_REQUEST_TIMEOUT_SECONDS = 30.0
+_REQUEST_LIMITER = threading.BoundedSemaphore(MAX_ACTIVE_ACCENT_REQUESTS)
 
 tags_metadata = [
     {
@@ -36,6 +42,29 @@ tags_metadata = [
 ]
 
 accent_router = APIRouter()
+
+
+def _acquire_request_slot() -> threading.BoundedSemaphore:
+    limiter = _REQUEST_LIMITER
+    if not limiter.acquire(blocking=False):
+        raise HTTPException(status_code=503, detail="Accent service is busy")
+    return limiter
+
+
+class _AdmissionStreamingResponse(StreamingResponse):
+    def __init__(
+        self,
+        content: AsyncIterator[bytes],
+        request_limiter: threading.BoundedSemaphore,
+    ) -> None:
+        super().__init__(content, media_type="application/x-ndjson")
+        self._request_limiter = request_limiter
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        try:
+            await super().__call__(scope, receive, send)
+        finally:
+            self._request_limiter.release()
 
 
 @accent_router.post("/MarkAccent/", tags=["MarkAccent"], response_model=AccentResponse)
@@ -52,13 +81,30 @@ async def mark_accent(
     chunk's HTTP code and `error` takes the first chunk's error;
     successful chunks' words still appear in `result`.
     """
-    logger.info(f"[API] Received Request Text: {request.text}")
+    request_limiter = _acquire_request_slot()
+    try:
+        try:
+            async with asyncio.timeout(ACCENT_REQUEST_TIMEOUT_SECONDS):
+                return await _mark_accent(request)
+        except TimeoutError as error:
+            raise HTTPException(
+                status_code=504,
+                detail="Accent processing timed out",
+            ) from error
+    finally:
+        request_limiter.release()
 
-    chunks = build_chunks(request.text)
+
+async def _mark_accent(request: Request) -> AccentResponse:
+    logger.info("[API] Received accent request chars=%d", len(request.text))
+
+    chunks = await build_chunks(request.text)
+    if len(chunks) > MAX_CHUNKS_PER_REQUEST:
+        raise HTTPException(status_code=413, detail="Too many text chunks")
     if not chunks:
         return AccentResponse(status=200, result=[], error=None)
 
-    tasks = schedule_chunks(
+    scheduled = schedule_chunks(
         chunks,
         render_english_furigana=request.render_english_furigana,
         render_katakana_furigana=request.render_katakana_furigana,
@@ -68,18 +114,20 @@ async def mark_accent(
     merged: list[WordAccentResult] = []
     worst_status = 200
     first_error: ErrorInfo | None = None
-    # `cancel_pending` in the finally stops in-flight chunks if the client
-    # disconnects mid-request (the handler is cancelled); on a normal run
-    # every task is already done.
+    # Closing the scheduler cancels queued coroutine tasks. Native work that
+    # already entered a worker thread cannot be stopped safely, so cancellation
+    # drains it while retaining its process permit before cleanup completes.
     try:
-        for (chunk_idx, sub_idx, _text), task in zip(chunks, tasks):
+        async for (chunk_idx, sub_idx, _text), task in scheduled:
             try:
                 resp = await task
-            except Exception as exc:
-                logger.exception(f"Chunk {chunk_idx}.{sub_idx} failed")
-                detail = str(exc) or repr(exc) or type(exc).__name__
+            except Exception:  # noqa: BLE001  # noqa: BROAD_EXCEPT_OK
+                logger.exception("Chunk %d.%d failed", chunk_idx, sub_idx)
                 if first_error is None:
-                    first_error = ErrorInfo(code=500, message=f"Error: {detail}")
+                    first_error = ErrorInfo(
+                        code=500,
+                        message="Accent processing failed",
+                    )
                 worst_status = max(worst_status, 500)
                 continue
             if resp.result:
@@ -89,7 +137,7 @@ async def mark_accent(
             if resp.error is not None and first_error is None:
                 first_error = resp.error
     finally:
-        await cancel_pending(tasks)
+        await scheduled.aclose()
 
     return AccentResponse(
         status=worst_status,
@@ -106,8 +154,8 @@ async def mark_accent_stream(
 
     Uses the same `build_chunks` + `schedule_chunks` pipeline as
     `/MarkAccent/`, so per-chunk results are byte-identical. The only
-    difference is delivery: each chunk is yielded as soon as it
-    finishes (in input order) rather than collected into one AccentResponse.
+        difference is delivery: each chunk is yielded in input order rather
+        than collected into one AccentResponse.
 
     Each emitted object carries `{"chunk": line_idx, "subchunk":
     sub_idx}`: `line_idx` is the original `\\n`-split index (blank
@@ -115,44 +163,79 @@ async def mark_accent_stream(
     empty); `sub_idx` distinguishes sentences inside one line. A line
     with no terminator yields one subchunk with `sub_idx=0`.
     """
-    logger.info(f"[API] Received streaming request: {request.text!r}")
-
-    chunks = build_chunks(request.text)
+    request_limiter = _acquire_request_slot()
+    deadline = asyncio.get_running_loop().time() + ACCENT_REQUEST_TIMEOUT_SECONDS
+    try:
+        try:
+            async with asyncio.timeout_at(deadline):
+                logger.info(
+                    "[API] Received streaming request chars=%d",
+                    len(request.text),
+                )
+                chunks = await build_chunks(request.text)
+                if len(chunks) > MAX_CHUNKS_PER_REQUEST:
+                    raise HTTPException(status_code=413, detail="Too many text chunks")
+        except TimeoutError as error:
+            raise HTTPException(
+                status_code=504,
+                detail="Accent processing timed out",
+            ) from error
+    except BaseException:  # noqa: BLE001  # noqa: BROAD_EXCEPT_OK
+        request_limiter.release()
+        raise
 
     async def generate() -> AsyncIterator[bytes]:
         if not chunks:
             return
-        tasks = schedule_chunks(
+        scheduled = schedule_chunks(
             chunks,
             render_english_furigana=request.render_english_furigana,
             render_katakana_furigana=request.render_katakana_furigana,
             script=request.script,
         )
-        # If the client disconnects mid-stream, Starlette throws GeneratorExit
-        # into the paused `yield`; the finally then cancels every still-pending
-        # chunk instead of running them to completion for output nobody will
-        # read.
         try:
-            for (chunk_idx, sub_idx, _text), task in zip(chunks, tasks):
-                try:
-                    resp = await task
-                    payload: dict[str, Any] = {
-                        "chunk": chunk_idx,
-                        "subchunk": sub_idx,
-                        **resp.model_dump(),
-                    }
-                except Exception as exc:
-                    logger.exception(f"Streaming chunk {chunk_idx}.{sub_idx} failed")
-                    detail = str(exc) or repr(exc) or type(exc).__name__
-                    payload = {
-                        "chunk": chunk_idx,
-                        "subchunk": sub_idx,
-                        "status": 500,
-                        "result": None,
-                        "error": {"code": 500, "message": f"Error: {detail}"},
-                    }
+            try:
+                async with asyncio.timeout_at(deadline):
+                    async for (chunk_idx, sub_idx, _text), task in scheduled:
+                        try:
+                            resp = await task
+                            payload: dict[str, Any] = {
+                                "chunk": chunk_idx,
+                                "subchunk": sub_idx,
+                                **resp.model_dump(),
+                            }
+                        except Exception:  # noqa: BLE001  # noqa: BROAD_EXCEPT_OK
+                            logger.exception(
+                                "Streaming chunk %d.%d failed",
+                                chunk_idx,
+                                sub_idx,
+                            )
+                            payload = {
+                                "chunk": chunk_idx,
+                                "subchunk": sub_idx,
+                                "status": 500,
+                                "result": None,
+                                "error": {
+                                    "code": 500,
+                                    "message": "Accent processing failed",
+                                },
+                            }
+                        yield (json.dumps(payload, ensure_ascii=False) + "\n").encode(
+                            "utf-8"
+                        )
+            except TimeoutError:
+                payload = {
+                    "chunk": -1,
+                    "subchunk": -1,
+                    "status": 504,
+                    "result": None,
+                    "error": {
+                        "code": 504,
+                        "message": "Accent processing timed out",
+                    },
+                }
                 yield (json.dumps(payload, ensure_ascii=False) + "\n").encode("utf-8")
         finally:
-            await cancel_pending(tasks)
+            await scheduled.aclose()
 
-    return StreamingResponse(generate(), media_type="application/x-ndjson")
+    return _AdmissionStreamingResponse(generate(), request_limiter)
