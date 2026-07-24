@@ -2,12 +2,11 @@
 
 Threads the layers together:
 
-  1. `preprocess.strip_urls / strip_number_commas / strip_x_between_digits`
+  1. `preprocess.strip_x_between_digits / strip_urls / strip_number_commas`
      — pre-tokenisation surface rewrites with bookkeeping for restoration.
-  2. `tokenizer.tag_local` — fugashi + UniDic in-process tokenisation
-     (also fills in furigana for standalone symbols `#`, `%`, … via
-     `preprocess.SYMBOL_READINGS`, so digits and symbols stay separate
-     tokens with the symbol's reading anchored to itself).
+  2. `tokenizer.tag_local` — fugashi + UniDic in-process tokenisation;
+     numeric + readable-symbol pairs such as `2℃` become one compound,
+     while standalone symbols get readings from `preprocess.SYMBOL_READINGS`.
   3. `reading_overrides.apply_furigana_overrides` — regex date/duration
      overrides applied before accent so the engine sees normalised surfaces.
   4. `openjtalk.get_openjtalk_result` — per-mora pitch contour from the
@@ -20,8 +19,8 @@ Threads the layers together:
   8. `postprocess.flatten_heiban_particle_accent / suppress_punct_furigana
      / apply_furigana_toggles / suppress_particle_furigana /
      split_okurigana` — rendering polish (see `postprocess.py`).
-  9. `preprocess.restore_number_commas / restore_x_between_digits /
-     restore_urls` — undo the pre-tokenisation surface rewrites.
+  9. `preprocess.restore_number_commas / restore_urls /
+      restore_x_between_digits` — undo the pre-tokenisation surface rewrites.
  10. `postprocess.convert_furigana_script` — last pass, rewrites every
      furigana field into the requested output script.
 
@@ -29,7 +28,7 @@ The pitch-accent backend is the in-process OpenJTalk frontend
 (`openjtalk.py`), which fills the per-mora `{text, accent}` contract the
 aligner consumes.
 
-`_build_chunks` + `_schedule_chunks` are shared between the regular
+`chunking.build_chunks` + `chunking.schedule_chunks` are shared between the regular
 `/MarkAccent/` (collected) and `/MarkAccent/stream/` (yielded) endpoints
 so both emit byte-identical per-chunk results; only the delivery shape
 differs.
@@ -40,11 +39,10 @@ from __future__ import annotations
 import asyncio
 import logging
 
-import neologdn
-
 from api.accent.align import align_accent
+from api.accent.chunking import build_chunks, cancel_pending, schedule_chunks
 from api.accent.models import AccentResponse, ErrorInfo, WordAccentResult
-from api.accent.openjtalk import get_openjtalk_result
+from api.accent.openjtalk import get_openjtalk_mora_counts, get_openjtalk_result
 from api.accent.postprocess import (
     apply_furigana_toggles,
     convert_furigana_script,
@@ -54,16 +52,19 @@ from api.accent.postprocess import (
     suppress_punct_furigana,
 )
 from api.accent.preprocess import (
-    cap_chunk_length,
+    NUMERIC_PATTERN,
+    NUMERIC_UNIT_RE,
+    READABLE_COMPOUND_RE,
+    SYMBOL_READINGS,
+    clean_hidden_english,
     has_japanese,
+    normalize_and_strip_x_between_digits,
     restore_number_commas,
     restore_urls,
     restore_x_between_digits,
-    split_sentences,
     strip_acronym_dots,
     strip_number_commas,
     strip_urls,
-    strip_x_between_digits,
 )
 from api.accent.reading_overrides import (
     apply_accent_overrides,
@@ -73,6 +74,13 @@ from api.accent.reading_overrides import (
 from api.accent.tokenizer import tag_local
 
 logger = logging.getLogger("api")
+
+__all__ = [
+    "build_chunks",
+    "cancel_pending",
+    "process_accent_chunk",
+    "schedule_chunks",
+]
 
 
 async def process_accent_chunk(
@@ -87,7 +95,7 @@ async def process_accent_chunk(
     `/api/MarkAccent/stream/` (one call per `\\n`-split sentence).
     """
     try:
-        query_text = neologdn.normalize(text, tilde="normalize")
+        query_text, x_rewrites = normalize_and_strip_x_between_digits(text)
 
         # Strip URLs first so a pure-URL line is detected as non-Japanese
         # by the language check below and short-circuits the pipeline.
@@ -99,23 +107,26 @@ async def process_accent_chunk(
         # after alignment via `restore_number_commas`.
         stripped_text, number_strips = strip_number_commas(stripped_text)
 
-        # Swap `\d×\d` → `\d/\d` so OpenJTalk reads each number separately
-        # instead of merging '19×19' into '1919' (千九百十九). `×` is
-        # restored on the surface after alignment via
-        # `restore_x_between_digits`.
-        stripped_text, x_count = strip_x_between_digits(stripped_text)
-
-        # No hiragana/katakana/kanji outside URLs — passthrough the line
-        # as a single token. Callers reconstructing the document still
-        # see the chunk in the stream; we just skip the tokeniser + OpenJTalk
-        # round-trips entirely.
-        if not has_japanese(stripped_text):
+        # Skip the expensive engines only when the chunk has no Japanese,
+        # digits, spoken symbols, or requested English reading.
+        has_spoken_symbol = any(char in SYMBOL_READINGS for char in stripped_text)
+        has_digit = any(char.isdigit() for char in stripped_text)
+        has_english = any(
+            "a" <= char <= "z" or "A" <= char <= "Z" for char in stripped_text
+        )
+        needs_pipeline = (
+            has_japanese(stripped_text)
+            or has_spoken_symbol
+            or has_digit
+            or (render_english_furigana and has_english)
+        )
+        if not needs_pipeline:
             return AccentResponse(
                 status=200,
                 result=[
                     WordAccentResult(
                         surface=query_text,
-                        furigana=query_text,
+                        furigana="",
                         accent=[],
                         subword=[],
                     )
@@ -132,7 +143,7 @@ async def process_accent_chunk(
         # Offload the tokeniser to a worker thread: `tag_local` runs
         # fugashi's CPU-bound C parse against the 1.3 GB UniDic dict. On the
         # event-loop thread it would block concurrent chunks and serialise
-        # the Semaphore(4) fan-out (same rationale as the OpenJTalk offload
+        # the four-task process-wide window (same rationale as the OpenJTalk offload
         # in `get_openjtalk_result`). The shared MeCab Tagger is serialised
         # behind `tokenizer._TAGGER_LOCK` so concurrent workers can't corrupt
         # its C state.
@@ -149,18 +160,57 @@ async def process_accent_chunk(
             )
         logger.debug("Tokeniser Results Count: %d", len(furigana_results))
 
+        expected_mora_counts: list[int | None] = [None] * len(furigana_results)
+        count_indexes: list[int] = []
+        count_queries: list[str] = []
+        for index, token in enumerate(furigana_results):
+            is_numeric_unit = bool(NUMERIC_UNIT_RE.match(token.surface))
+            is_english = (
+                bool(token.surface)
+                and any(
+                    "a" <= char <= "z" or "A" <= char <= "Z" for char in token.surface
+                )
+                and all(
+                    "a" <= char <= "z"
+                    or "A" <= char <= "Z"
+                    or "0" <= char <= "9"
+                    or char in ("-", "_", ".")
+                    for char in token.surface
+                )
+            )
+            if (
+                NUMERIC_PATTERN.match(token.surface)
+                or READABLE_COMPOUND_RE.match(token.surface)
+                or is_numeric_unit
+            ):
+                count_indexes.append(index)
+                count_queries.append(token.surface)
+            elif is_english:
+                if render_english_furigana:
+                    count_indexes.append(index)
+                    count_queries.append(strip_acronym_dots(token.surface))
+                else:
+                    expected_mora_counts[index] = 0
+        counts = await get_openjtalk_mora_counts(count_queries)
+        for index, count in zip(count_indexes, counts):
+            expected_mora_counts[index] = count
+
         # Acronym `.` strip: `Wifi.7` would otherwise be normalised to
         # `Wifi。7`, whose injected `。` collapses the prosody on the rest of
         # the sentence (downstream accents come back all-zero). Strip the `.`
         # for the accent query so the frontend sees `Wifi7`; fugashi keeps the
         # original surface so the acronym-merge preserves `Wifi.7` for display.
         accent_query_text = strip_acronym_dots(stripped_text)
+        if not render_english_furigana:
+            accent_query_text = clean_hidden_english(accent_query_text)
 
         # Pitch-accent enrichment from the in-process OpenJTalk frontend.
         # Fully offline — no network call, so there is no unavailable path.
         _surface, accent_results = await get_openjtalk_result(accent_query_text)
 
-        final_results = await align_accent(furigana_results, accent_results)
+        final_results = await align_accent(
+            furigana_results, accent_results, expected_mora_counts
+        )
         final_results = apply_accent_overrides(final_results)
         # POS-driven suffix patches run after the full-span overrides so
         # that tokens replaced by overrides (pos=None) are skipped by the
@@ -186,8 +236,8 @@ async def process_accent_chunk(
         # portions. Top-level surface/furigana/accent stay intact.
         final_results = split_okurigana(final_results)
         final_results = restore_number_commas(final_results, number_strips)
-        final_results = restore_x_between_digits(final_results, x_count)
         final_results = restore_urls(final_results, urls)
+        final_results = restore_x_between_digits(final_results, x_rewrites)
         # Output-script switch runs last so every furigana field
         # (top-level + per-mora + subword) lands in the requested
         # script before serialisation. Hiragana is the no-op default.
@@ -195,98 +245,10 @@ async def process_accent_chunk(
 
         return AccentResponse(status=200, result=final_results)
 
-    except Exception as e:
-        logger.exception(f"Unexpected error occurred: {text}")
-        # Some httpx exceptions (PoolTimeout, ReadTimeout) have empty
-        # str(); fall back to the type name so the client sees something.
-        detail = str(e) or repr(e) or type(e).__name__
+    except Exception:
+        logger.exception("Unexpected accent error chars=%d", len(text))
         return AccentResponse(
             status=500,
             result=None,
-            error=ErrorInfo(code=500, message=f"Error: {detail}"),
+            error=ErrorInfo(code=500, message="Accent processing failed"),
         )
-
-
-def build_chunks(text: str) -> list[tuple[int, int, str]]:
-    """Split `text` into (line_idx, sub_idx, sentence) chunks.
-
-    Long paragraphs are split into sentence-sized chunks because a single
-    misalignment used to cascade across the whole paragraph, and shorter
-    inputs give the OpenJTalk frontend a cleaner prosodic phrase to work
-    with. Splitting also fans the work out under the semaphore.
-
-    Any chunk still longer than `MAX_CHUNK_CHARS` after sentence splitting
-    (degenerate input with no `。！？．` terminators) is length-split by
-    `cap_chunk_length` — preferring a comma / pause boundary, falling back to a
-    hard cut — so the quadratic alignment DP can't blow up on one unbroken
-    chunk. Each resulting piece gets its own `sub_idx`, so the streaming
-    endpoint's (chunk, subchunk) pairs stay unique and ordered.
-
-    Shared by `/MarkAccent/` (collected) and `/MarkAccent/stream/`
-    (yielded) so both endpoints emit byte-identical per-chunk results;
-    only the delivery shape differs.
-    """
-    chunks: list[tuple[int, int, str]] = []
-    for line_idx, line in enumerate(text.split("\n")):
-        if not line.strip():
-            continue
-        sub_idx = 0
-        for sentence in split_sentences(line):
-            for piece in cap_chunk_length(sentence):
-                chunks.append((line_idx, sub_idx, piece))
-                sub_idx += 1
-    return chunks
-
-
-def schedule_chunks(
-    chunks: list[tuple[int, int, str]],
-    render_english_furigana: bool,
-    render_katakana_furigana: bool,
-    script: str = "hiragana",
-) -> list[asyncio.Task[AccentResponse]]:
-    """Schedule one `process_accent_chunk` task per chunk under a
-    shared semaphore.
-
-    The semaphore bounds CPU concurrency for the in-process OpenJTalk
-    frontend: each chunk's accent pass runs the C-extension work in a
-    worker thread (see `openjtalk.get_openjtalk_result`), so capping
-    in-flight chunks at 4 keeps a long document from spawning dozens of
-    threads while well-behaved inputs still parallelise (a 4-chunk
-    paragraph fans out fully).
-
-    Tasks run detached on the event loop; the caller owns their lifetime
-    and MUST drain them through `cancel_pending` in a `finally` so a client
-    disconnect doesn't leave them doing work for a response nobody reads.
-    (A `TaskGroup` would tie the lifetime up automatically, but `async with
-    TaskGroup()` inside the streaming async generator wraps the `aclose()`
-    `GeneratorExit` into a `BaseExceptionGroup` — so explicit cancellation is
-    the only shape that closes the stream cleanly.)
-    """
-    semaphore = asyncio.Semaphore(4)
-
-    async def run_chunk(line: str) -> AccentResponse:
-        async with semaphore:
-            return await process_accent_chunk(
-                line,
-                render_english_furigana=render_english_furigana,
-                render_katakana_furigana=render_katakana_furigana,
-                script=script,
-            )
-
-    return [asyncio.create_task(run_chunk(text)) for _, _, text in chunks]
-
-
-async def cancel_pending(tasks: list[asyncio.Task[AccentResponse]]) -> None:
-    """Cancel any not-yet-finished chunk tasks and await their teardown.
-
-    Called from both endpoints' `finally` so a client disconnect — the
-    `GeneratorExit` thrown into the streaming response, or the collected
-    request handler being cancelled — stops in-flight chunk work instead
-    of orphaning them. On normal completion every task is already done, so
-    this is a no-op `gather` over finished tasks.
-    """
-    for task in tasks:
-        if not task.done():
-            task.cancel()
-    if tasks:
-        await asyncio.gather(*tasks, return_exceptions=True)

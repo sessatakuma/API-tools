@@ -131,7 +131,7 @@ async def get_openjtalk_result(
     fan-out (worst on `/MarkAccent/stream/`). `_OJ_LOCK` (held inside `_tag`)
     keeps concurrent workers from corrupting the shared OpenJTalk C state.
     """
-    logger.debug(f"[OpenJTalk] Tagging: {query_text}")
+    logger.debug("[OpenJTalk] tagging chars=%d", len(query_text))
     morae, markings = await asyncio.to_thread(_tag, query_text)
 
     # Both come from the same OpenJTalk frontend, so mora counts normally
@@ -140,10 +140,9 @@ async def get_openjtalk_result(
     n = min(len(morae), len(markings))
     if len(morae) != len(markings):
         logger.warning(
-            "[OpenJTalk] mora/accent length mismatch (%d kana vs %d accent) for %r",
+            "[OpenJTalk] mora/accent length mismatch (%d kana vs %d accent)",
             len(morae),
             len(markings),
-            query_text,
         )
     results = [{"text": morae[i], "accent": markings[i]} for i in range(n)]
     for i in range(n, len(morae)):
@@ -151,3 +150,17 @@ async def get_openjtalk_result(
 
     paragraph = "".join(morae)
     return paragraph, results
+
+
+def _count_morae(texts: list[str]) -> list[int]:
+    cache: dict[str, int] = {}
+    counts: list[int] = []
+    for text in texts:
+        if text not in cache:
+            cache[text] = len(_kana_morae(text))
+        counts.append(cache[text])
+    return counts
+
+
+async def get_openjtalk_mora_counts(texts: list[str]) -> list[int]:
+    return await asyncio.to_thread(_count_morae, texts)
