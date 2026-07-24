@@ -62,6 +62,7 @@ class FuriganaOverride:
     pattern: re.Pattern[str]
     replacements: tuple[ReplacementToken, ...]
     description: str = ""
+    priority: int = 0
     # When set, the regex match is additionally filtered: only fires if
     # `pos_match(tokens_in_match_span)` returns True. None preserves the
     # original surface-only matching used by every existing override. The
@@ -82,7 +83,7 @@ _NOT_NUM_AHEAD = rf"(?![{_DIGIT_CLASS}])"
 
 
 def _moji_seq(text: str, t: int = _HEIBAN) -> tuple[tuple[str, int], ...]:
-    return tuple((c, t) for c in text)
+    return tuple((mora, t) for mora in _split_morae(text))
 
 
 # Small kana that attach to the preceding mora (so じゅ counts as one
@@ -151,9 +152,10 @@ def _atamadaka_seq(text: str) -> tuple[tuple[str, int], ...]:
     # LOW. Marking the tail as _HEIBAN renders a high plateau after the
     # downstep, which contradicts the pitch contour and looks visually
     # wrong in strong-mode renderers.
-    if not text:
+    morae = _split_morae(text)
+    if not morae:
         return ()
-    return ((text[0], _FALL),) + tuple((c, _NONE) for c in text[1:])
+    return ((morae[0], _FALL),) + tuple((mora, _NONE) for mora in morae[1:])
 
 
 # Numeric variant helpers: keep N-prefixed patterns (N日, N日間, N歳) from
@@ -209,7 +211,7 @@ def _day_of_week_overrides() -> list[FuriganaOverride]:
         # furigana).
         out.append(
             FuriganaOverride(
-                pattern=re.compile(rf"[((]{kanji}[))]"),
+                pattern=re.compile(rf"[(（]{kanji}[)）]"),
                 replacements=(
                     ReplacementToken(),  # left bracket: both inherit
                     ReplacementToken(furigana=reading, accent=_moji_seq(reading)),
@@ -262,16 +264,17 @@ def _date_overrides() -> list[FuriganaOverride]:
         (30, "さんじゅうにち", _moji_seq("さんじゅうにち")),
         (31, "さんじゅういちにち", _moji_seq("さんじゅういちにち")),
     ]
-    return [
-        FuriganaOverride(
-            pattern=re.compile(
-                rf"{_NOT_NUM_BEHIND}{_numeric_pattern(n)}日{_NOT_NUM_AHEAD}"
-            ),
-            replacements=(ReplacementToken(furigana=furigana, accent=accent),),
-            description=f"特殊日期 {n}日",
+    out: list[FuriganaOverride] = []
+    for n, furigana, accent in readings:
+        prefix = r"(?<=[月年])" if n == 1 else _NOT_NUM_BEHIND
+        out.append(
+            FuriganaOverride(
+                pattern=re.compile(rf"{prefix}{_numeric_pattern(n)}日{_NOT_NUM_AHEAD}"),
+                replacements=(ReplacementToken(furigana=furigana, accent=accent),),
+                description=f"特殊日期 {n}日",
+            )
         )
-        for n, furigana, accent in readings
-    ]
+    return out
 
 
 def _duration_overrides() -> list[FuriganaOverride]:
@@ -353,6 +356,23 @@ def _age_overrides() -> list[FuriganaOverride]:
     ]
 
 
+def _person_counter_overrides() -> list[FuriganaOverride]:
+    readings = [
+        (1, "ひとり", (("ひ", _NONE), ("と", _FALL), ("り", _NONE))),
+        (2, "ふたり", (("ふ", _NONE), ("た", _HEIBAN), ("り", _FALL))),
+    ]
+    return [
+        FuriganaOverride(
+            pattern=re.compile(
+                rf"(?<!第){_NOT_NUM_BEHIND}{_numeric_pattern(n)}人(?![口前称])"
+            ),
+            replacements=(ReplacementToken(furigana=furigana, accent=accent),),
+            description=f"人数 {n}人",
+        )
+        for n, furigana, accent in readings
+    ]
+
+
 def _user_patch_overrides() -> list[FuriganaOverride]:
     """Compile `user_patches.USER_PATCHES` into FuriganaOverride entries.
 
@@ -402,6 +422,7 @@ def _user_patch_overrides() -> list[FuriganaOverride]:
                 pattern=re.compile(re.escape(literal_text)),
                 replacements=tuple(replacements),
                 description=f"user patch: {literal_text}",
+                priority=1,
             )
         )
     return out
@@ -417,6 +438,7 @@ OVERRIDES: list[FuriganaOverride] = (
     _day_of_week_overrides()
     + _duration_overrides()
     + _date_overrides()
+    + _person_counter_overrides()
     + _age_overrides()
     + _user_patch_overrides()
 )
@@ -441,14 +463,22 @@ def _collect_matches(text: str) -> list[_Match]:
     for ov in OVERRIDES:
         for rm in ov.pattern.finditer(text):
             raw.append(_Match(start=rm.start(), end=rm.end(), override=ov))
-    raw.sort(key=lambda x: (x.start, -(x.end - x.start)))
+    raw.sort(
+        key=lambda item: (
+            -item.override.priority,
+            item.start,
+            -(item.end - item.start),
+        )
+    )
     chosen: list[_Match] = []
-    last_end = 0
-    for cm in raw:
-        if cm.start < last_end:
+    for candidate in raw:
+        if any(
+            candidate.start < existing.end and existing.start < candidate.end
+            for existing in chosen
+        ):
             continue
-        chosen.append(cm)
-        last_end = cm.end
+        chosen.append(candidate)
+    chosen.sort(key=lambda item: item.start)
     return chosen
 
 
