@@ -1,13 +1,12 @@
 ---
 name: Tests
 
-# Runs lint, type-check, and the unit test suite on every PR. The suite
-# (tests/test_align.py, tests/test_fullcontext.py, tests/test_openjtalk.py)
-# needs neither the ~1.3 GB UniDic dict nor the network for its dict: the
-# align/fullcontext tests are pure Python, and the OpenJTalk tests use only
-# pyopenjtalk's bundled open_jtalk_dic (~23 MB, fetched on first call). So this
-# gate is fast and does NOT overlap the heavier offline docker-build check.
+# Runs lint, type-check, and the unit test suite on every PR. Unit tests mock
+# the UniDic boundary, while the mandatory Docker build check exercises both
+# real dictionaries offline. This keeps the fast gate independent of the
+# ~1.3 GB UniDic download without losing integration coverage.
 on:  # yamllint disable-line rule:truthy
+  workflow_call:
   pull_request:
     branches: ["main", "dev"]
   workflow_dispatch:

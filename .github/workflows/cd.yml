@@ -8,16 +8,22 @@ on:  # yamllint disable-line rule:truthy
   workflow_dispatch:
 
 permissions:
+  actions: read
   contents: read
   packages: write
 
 concurrency:
-  group: cd
-  cancel-in-progress: true
+  group: cd-${{ github.ref }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/v') }}
 
 jobs:
+  tests:
+    name: Validate source
+    uses: ./.github/workflows/tests.yml
+
   build-and-push:
     name: Build and push image to GHCR
+    needs: [tests]
     runs-on: ubuntu-latest
     env:
       REGISTRY: ghcr.io
@@ -26,6 +32,23 @@ jobs:
       # Must match deploy/compose.yml's api-tools image in jpcorrect-backend.
       IMAGE_NAME: sessatakuma/api-tools
     steps:
+      - name: Wait for earlier CD runs before publishing a release
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          while true; do
+            blocking_run=$(gh api \
+              "repos/${GITHUB_REPOSITORY}/actions/workflows/cd.yml/runs?per_page=100" \
+              --jq ".workflow_runs[] | select(.run_number < ${GITHUB_RUN_NUMBER} and (.status == \"queued\" or .status == \"in_progress\")) | .id" \
+              | head -n 1)
+            if [[ -z "$blocking_run" ]]; then
+              break
+            fi
+            echo "Waiting for earlier CD run $blocking_run"
+            sleep 15
+          done
+
       - name: Checkout
         uses: actions/checkout@v6
 
@@ -54,16 +77,40 @@ jobs:
             type=semver,pattern={{major}}.{{minor}}
             type=raw,value=stable,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
 
-      - name: Build and push
+      - name: Build image
         uses: docker/build-push-action@v7
         with:
           context: .
-          file: ./Dockerfile          # adjust if the api-tools Dockerfile path differs
+          file: ./Dockerfile
           platforms: linux/amd64
-          push: true
-          provenance: true
-          sbom: true
+          push: false
+          load: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+      - name: Smoke-test production lifecycle offline
+        run: |
+          image=$(printf '%s\n' '${{ steps.meta.outputs.tags }}' | head -n 1)
+          container=api-tools-release-smoke-${{ github.run_id }}
+          trap 'docker rm -f "$container" >/dev/null 2>&1 || true' EXIT
+          docker run -d --name "$container" --network none --read-only --tmpfs /tmp \
+            -e PYTHONDONTWRITEBYTECODE=1 \
+            "$image"
+          for attempt in $(seq 1 30); do
+            if docker exec "$container" python -c \
+              "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/openapi.json', timeout=2)"; then
+              break
+            fi
+            if [[ "$attempt" == 30 ]]; then
+              docker logs "$container"
+              exit 1
+            fi
+            sleep 1
+          done
+          docker exec "$container" python -c \
+            "import json, urllib.request; request=urllib.request.Request('http://127.0.0.1:8000/api/MarkAccent/', data=json.dumps({'text':'東京'}).encode(), headers={'Content-Type':'application/json'}); response=json.load(urllib.request.urlopen(request, timeout=30)); assert response['status'] == 200 and response['result']"
+
+      - name: Push smoke-tested image
+        run: docker push --all-tags "${REGISTRY}/${IMAGE_NAME}"
