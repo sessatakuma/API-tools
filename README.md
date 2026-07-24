@@ -3,7 +3,7 @@
 A FastAPI service that marks Japanese pitch accent and furigana on
 input text. The accent pipeline is fully local and offline — fugashi +
 UniDic CWJ 2025-12-31 for morphology, and an in-process OpenJTalk
-frontend (MeCab + the bundled `open_jtalk_dic`) for per-mora pitch. No
+frontend (MeCab + the preloaded `open_jtalk_dic`) for per-mora pitch. No
 network calls, external API keys, or `.env` setup required.
 
 > [!WARNING]
@@ -15,7 +15,7 @@ network calls, external API keys, or `.env` setup required.
 | Endpoint | Description |
 |--|--|
 | `POST /api/MarkAccent/` | Mark pitch accent + furigana on the whole input, returns one `AccentResponse`. |
-| `POST /api/MarkAccent/stream/` | Same pipeline, streams one NDJSON object per `\n`-split sentence as it finishes. |
+| `POST /api/MarkAccent/stream/` | Same pipeline, streams one NDJSON object per `\n`-split sentence in input order. |
 | `POST /api/UsageQuery/HeadWords/` | Look up Yahoo Realtime/News headwords for a query (delegates to an external HTTP endpoint). |
 | `POST /api/UsageQuery/URL/` | Resolve headword references to URLs. |
 | `POST /api/DictQuery/` | JMdict dictionary lookup. |
@@ -33,7 +33,7 @@ Request body:
 
 | Field | Type | Default | Description |
 |--|--|--|--|
-| `text` | string | required | The Japanese text to mark. Newline-separated chunks are processed in parallel under a small semaphore. |
+| `text` | string | required | The text to mark (maximum 40,000 characters and 64 chunks). Work is admitted through one process-wide four-task window with a 30-second request deadline. |
 | `render_english_furigana` | bool | `false` | Show Japanese-style readings on ASCII-letter tokens (`Apple` → `アップル`). |
 | `render_katakana_furigana` | bool | `false` | Show hiragana ruby on pure-katakana tokens (`カメラ` → `かめら`). The per-mora pitch list is returned either way. |
 | `script` | `"hiragana"` \| `"katakana"` \| `"romaji"` | `"hiragana"` | Output script for every furigana field. Internal alignment stays hiragana — this is a response-shape switch. Romaji uses jaconv's default Hepburn-style table (`おう` → `ou`); no macrons. |
@@ -132,10 +132,13 @@ and sync the project:
 
 ```bash
 uv sync                                        # install deps (requires uv)
+uv run python -c "import pyopenjtalk; pyopenjtalk.extract_fullcontext('テスト')"  # cache OpenJTalk dictionary before offline startup
 ./scripts/download_unidic.sh                    # UniDic CWJ 2025-12-31 (~700 MB compressed download, ~1.3 GB installed)
 ```
 
-No environment variables or API keys are required.
+Run both dictionary steps while the build host has network access. Subsequent
+startup and accent requests can then run fully offline. No environment variables
+or API keys are required.
 
 Pass `cwj-2021-08-31` to install the older UniDic 3.1.0 dictionary
 instead. NINJAL also publishes a **CSJ** (現代話し言葉) variant
@@ -165,6 +168,18 @@ intentionally removed; this service is expected to sit behind the
 parent backend or on a private network. In
 [jpcorrect-backend](https://github.com/sessatakuma/jpcorrect-backend),
 the equivalent workflow is `make api-tools`.
+
+Every endpoint has a 1 MiB encoded HTTP-body limit. Accent requests additionally
+allow at most 40,000 text characters, 64 generated chunks, a 30-second
+processing deadline, and four
+simultaneously admitted requests per process. Oversized bodies and chunk sets
+return HTTP 413; accent requests arriving while all four slots are occupied
+return HTTP 503 instead of waiting in an unbounded in-process queue.
+
+Client cancellation stops queued chunk coroutines. Work already admitted to
+the tokenizer, OpenJTalk, or alignment worker thread cannot be interrupted
+safely; it retains its process permit until completion so disconnected work
+cannot make the native concurrency bound exceed four.
 
 ### Quick smoke test
 
@@ -214,7 +229,7 @@ async def foo(
   `ou` / `ee` rather than `ō` / `ē`. Add a macron pass in the
   client if you need that.
 - **In-process, CPU-bound accent engine.** The accent pipeline runs
-  OpenJTalk's frontend (MeCab + the bundled `open_jtalk_dic`) in this
+  OpenJTalk's frontend (MeCab + the preloaded `open_jtalk_dic`) in this
   process — no network, so there is no "backend unreachable" failure
   mode. The C-extension work runs in a worker thread (serialised behind
   a lock, since the OpenJTalk frontend is not thread-safe), and long

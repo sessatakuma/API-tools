@@ -57,8 +57,8 @@ streaming endpoints.
 
 | Field | Type | Default | Meaning |
 |---|---|---|---|
-| `text` | `str` | required | The Japanese text to mark. |
-| `render_english_furigana` | `bool` | `False` | When `True`, ASCII-letter tokens (`Apple`, `G2P`) emit their Japanese-style ruby. Tokens that already carry a Japanese reading (unit compounds like `53mm` / `33m/s` / `3kg`) keep both ruby and accent regardless of this flag — the wipe only fires when `furigana` contains no kana. |
+| `text` | `str` | required | Text to mark; the app-wide HTTP-body limit is 1 MiB, while accent text is capped at 40,000 characters, 64 chunks, and a 30-second processing deadline. The process admits four concurrent accent requests; overflow receives HTTP 503 without queueing. |
+| `render_english_furigana` | `bool` | `False` | When `True`, ASCII-letter tokens (`Apple`, `G2P`) emit their Japanese-style ruby. Numeric SI-unit compounds such as `53mm` / `3kg` keep their Japanese reading regardless of this flag. |
 | `render_katakana_furigana` | `bool` | `False` | When `True`, pure-katakana tokens (`カメラ`) emit a hiragana ruby (`かめら`). When `False`, both the top-level `furigana` AND every `AccentInfo.furigana` are cleared so clients that draw ruby from the per-mora field don't render hiragana overlays on katakana surfaces. `accent_marking_type` and `length` are preserved either way so pitch can still be drawn. |
 | `script` | `Literal["hiragana","katakana","romaji"]` | `"hiragana"` | Output script for every furigana field (top-level, per-mora, subword). Internal alignment stays hiragana; this is a response-shape switch. Romaji uses jaconv's default Hepburn-style table — no macrons. |
 
@@ -116,20 +116,21 @@ The shape of the whole word can be read off the `accent` list:
 | `models.py` | Pydantic schemas (shared between both endpoints), `Request` toggles, strong-mode lexical-accent fields. |
 | `tokenizer.py` | In-process fugashi + NINJAL UniDic CWJ 2025-12-31 tokeniser — `tag_local`. Includes the `SYMBOL_READINGS` fallback that fills katakana readings for `#`, `%`, `@`, … when UniDic returns no `kana`. |
 | `preprocess.py` | Surface-layer URL / `1,234` / `\d×\d` strip + restore, `has_japanese` gate, `split_sentences`, `READABLE_SYMBOLS`, `SYMBOL_READINGS` table. |
-| `openjtalk.py` | In-process OpenJTalk pitch-accent engine — `get_openjtalk_result`. Maps OpenJTalk full-context labels (via `fullcontext.py`) to the project's `{text, accent}` per-mora shape. Fully offline (MeCab + bundled `open_jtalk_dic`, ~23 MB). |
+| `openjtalk.py` | In-process OpenJTalk pitch-accent engine — `get_openjtalk_result`. Maps OpenJTalk full-context labels (via `fullcontext.py`) to the project's `{text, accent}` per-mora shape. Fully offline after the build step preloads `open_jtalk_dic`. |
 | `fullcontext.py` | Shared HTS full-context label parser (`accent_markings_from_labels`) — turns OpenJTalk's per-phoneme labels into the 0/1/2 per-mora marking sequence. |
 | `align.py` | Needleman-Wunsch-style DP that aligns tokens against the engine's morae — `_match_cost`, edit distance, voicing fold, token kind classification. |
 | `reading_overrides.py` | Regex overrides (dates, `N日間`, `20歳→はたち`, weekday `(土)` …) + POS-driven `apply_accent_patches` (ます / たい first-mora-FALL) + compiles `USER_PATCHES`. |
 | `user_patches.py` | **User-maintained** patch table — literal-match overrides for cases where OpenJTalk or UniDic produce the wrong reading. (Pure data; see the dedicated section below.) |
 | `postprocess.py` | Rendering polish: suppress punct / particle furigana, flatten heiban-particle, English / katakana toggles, `split_okurigana`, `convert_furigana_script`. |
-| `pipeline.py` | MarkAccent orchestrator — runs preprocess → tokenizer → overrides → openjtalk → align → patches → postprocess → restore → script convert. Provides the shared `build_chunks` / `schedule_chunks`. |
+| `chunking.py` | Token-boundary chunk construction, process-wide four-task admission, ordered scheduling, and cancellation cleanup. Queued tasks are cancelled; admitted native work retains its permit until it finishes. |
+| `pipeline.py` | MarkAccent orchestrator — runs preprocess → tokenizer → overrides → openjtalk → align → patches → postprocess → restore → script convert. Re-exports chunk helpers for compatibility. |
 | `routes.py` | FastAPI router + the two endpoint handlers (collected and streaming). |
 | `__init__.py` | Re-exports `accent_router` for `main.py`. |
 
 Dependency direction (no cycles):
 
 ```
-routes.py  →  pipeline.py  →  align.py, openjtalk.py → fullcontext.py,
+routes.py  →  chunking.py  →  pipeline.py  →  align.py, openjtalk.py → fullcontext.py,
                               tokenizer.py, preprocess.py, postprocess.py,
                               reading_overrides.py  →  user_patches.py
                             ↘
