@@ -83,26 +83,108 @@ def test_rendaku_fold_matches_voiced_reading() -> None:
     assert _pairs(word) == [("ふ", 0), ("ん", 0), ("か", 1), ("ん", 2)]
 
 
-def test_numeric_split_keeps_empty_on_punct() -> None:
-    """`19×19` (→ `19/19`) splits 4+4; the empty phrase-break entry lands on `/`."""
-    # Models what preprocessing produces after `strip_x_between_digits`:
-    # two numeric tokens straddling a `/`, with an empty-text OpenJTalk entry as
-    # the phrase-break sentinel between the two spelled-out numbers.
+def test_numeric_split_keeps_spoken_connector_separate() -> None:
     accent = [
         _mora("じゅ", 0), _mora("う", 0), _mora("きゅ", 0), _mora("う", 0),
-        _mora("", 0),  # phrase-break sentinel inserted by the \d/\d rewrite
+        _mora("と", 0),
         _mora("じゅ", 0), _mora("う", 0), _mora("きゅ", 0), _mora("う", 0),
     ]  # fmt: skip
-    first, slash, second = _run([_numeric("19"), _punct("/"), _numeric("19")], accent)
-    # Each numeric free-consumes its own 4 morae — NOT sliced 1+7 — and the
-    # empty entry's 0.01 tiebreaker keeps it out of the numeric spans.
+    first, connector, second = _run(
+        [_numeric("19"), _kana("と", "と"), _numeric("19")], accent
+    )
     assert first.furigana == "じゅうきゅう"
     assert second.furigana == "じゅうきゅう"
     assert len(first.accent) == 4
     assert len(second.accent) == 4
-    # The empty sentinel is absorbed by the punct token, which renders no ruby.
-    assert slash.furigana == ""
+    assert _pairs(connector) == [("と", 0)]
+
+
+def test_numeric_split_balances_real_stream_without_sentinel() -> None:
+    accent = [
+        _mora("じゅ", 0),
+        _mora("う", 0),
+        _mora("きゅ", 0),
+        _mora("う", 0),
+        _mora("じゅ", 0),
+        _mora("う", 0),
+        _mora("きゅ", 0),
+        _mora("う", 0),
+        _mora("で", 0),
+        _mora("す", 0),
+    ]
+    first, slash, second, desu = _run(
+        [_numeric("19"), _punct("/"), _numeric("19"), _kana("です", "です")],
+        accent,
+    )
+    assert len(first.accent) == 4
     assert slash.accent == []
+    assert len(second.accent) == 4
+    assert _pairs(desu) == [("で", 0), ("す", 0)]
+
+
+def test_long_number_consumes_every_mora_before_counter() -> None:
+    accent = [_mora("あ", 0) for _ in range(35)] + [
+        _mora("え", 0),
+        _mora("ん", 0),
+    ]
+    number, yen = _run(
+        [_numeric("123456789012"), _kana("えん", "円")],
+        accent,
+    )
+    assert len(number.accent) == 35
+    assert _pairs(yen) == [("え", 0), ("ん", 0)]
+
+
+def test_english_display_uses_aligned_spoken_reading() -> None:
+    accent = [
+        _mora("あ", 0),
+        _mora("っ", 1),
+        _mora("ぷ", 1),
+        _mora("る", 2),
+    ]
+    (apple,) = _run([_english("Apple")], accent)
+    assert apple.furigana == "あっぷる"
+    assert "".join(a.furigana for a in apple.accent) == apple.furigana
+
+
+def test_heterogeneous_numbers_use_exact_mora_targets() -> None:
+    accent = [
+        _mora("い", 0),
+        _mora("ち", 2),
+        _mora("せ", 0),
+        _mora("ん", 2),
+    ]
+    one, comma, thousand = asyncio.run(
+        align_accent(
+            [_numeric("1"), _punct("、"), _numeric("1000")],
+            accent,
+            [2, None, 2],
+        )
+    )
+    assert one.furigana == "いち"
+    assert comma.accent == []
+    assert thousand.furigana == "せん"
+
+
+def test_english_and_numeric_tokens_use_independent_mora_targets() -> None:
+    accent = [
+        _mora("ふ", 0),
+        _mora("ー", 0),
+        _mora("ひゃ", 0),
+        _mora("く", 2),
+        _mora("ね", 0),
+        _mora("こ", 2),
+    ]
+    english, number, cat = asyncio.run(
+        align_accent(
+            [_english("foo"), _numeric("100"), _kana("ねこ", "猫")],
+            accent,
+            [2, 2, None],
+        )
+    )
+    assert english.furigana == "ふー"
+    assert number.furigana == "ひゃく"
+    assert cat.furigana == "ねこ"
 
 
 def test_punct_entry_not_leaked_onto_neighbour() -> None:

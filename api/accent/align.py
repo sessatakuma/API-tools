@@ -24,9 +24,11 @@ edit-distance / voicing-fold tables they depend on.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
 import string
+import threading
 from typing import Any
 
 import jaconv
@@ -39,6 +41,7 @@ from api.accent.preprocess import (
 )
 
 logger = logging.getLogger("api")
+_ALIGN_LOCK = threading.Lock()
 
 punctuation_marks = set(
     [
@@ -175,6 +178,51 @@ _K_MAX = 32
 _INF = float("inf")
 _FALLBACK_COST = 3.0  # cost of giving up on a single token (k=0 for kana/numeric)
 _PUNCT_TEXTS = {"、", "。", ",", ".", "?", "!", "！", "？"}
+
+
+def _numeric_mora_targets(
+    tokens: list[WordResult],
+    token_kinds: list[tuple[bool, bool, bool, bool]],
+    accent_texts: list[str],
+) -> list[int | None]:
+    targets: list[int | None] = [None] * len(tokens)
+    numeric_indexes = [index for index, kinds in enumerate(token_kinds) if kinds[0]]
+    if not numeric_indexes:
+        return targets
+    numeric_surfaces = {tokens[index].surface for index in numeric_indexes}
+    if len(numeric_surfaces) > 1:
+        return targets
+
+    reserved = 0
+    for token, (is_num, is_punct, is_compound, is_english) in zip(tokens, token_kinds):
+        if is_num or is_punct:
+            continue
+        if is_compound or is_english or (token.base is None and token.pos is None):
+            return targets
+        reserved += len(_split_morae(token.furigana))
+
+    voiced = sum(1 for text in accent_texts if text and text not in _PUNCT_TEXTS)
+    budget = voiced - reserved
+    if budget < len(numeric_indexes):
+        return targets
+
+    weights = [
+        max(1, sum(char.isdigit() for char in tokens[index].surface))
+        for index in numeric_indexes
+    ]
+    remaining = budget - len(numeric_indexes)
+    total_weight = sum(weights)
+    allocations = [1 + (remaining * weight // total_weight) for weight in weights]
+    unallocated = budget - sum(allocations)
+    remainders = [
+        (remaining * weight % total_weight, position)
+        for position, weight in enumerate(weights)
+    ]
+    for _remainder, position in sorted(remainders, reverse=True)[:unallocated]:
+        allocations[position] += 1
+    for index, allocation in zip(numeric_indexes, allocations):
+        targets[index] = allocation
+    return targets
 
 
 # Substitutions are cheaper than insertions/deletions: a substitution keeps
@@ -353,10 +401,9 @@ def _match_cost(
         upper = max(4, len(token.surface) * 4)
         if k > upper:
             return float(k - upper)
-        # Tiebreaker: empty OpenJTalk entries are phrase-break markers
-        # (notably the ones our preprocessing inserts when swapping
-        # `\d×\d` → `\d/\d`). They should be absorbed by the adjacent
-        # punct token, not stranded inside a numeric span — without
+        # Tiebreaker: empty backend entries are phrase-break markers. They
+        # should be absorbed by an adjacent punct token, not stranded inside
+        # a numeric span — without
         # this nudge the DP can split `19×19` into 1-mora-then-7-mora
         # since every k in [1, upper] has cost 0. The penalty is tiny
         # (well below kana _SUB_COST=0.4) so it only breaks ties.
@@ -542,7 +589,7 @@ def _build_word_result(
     # furigana of their own — surface OpenJTalk's reading instead.
     display = (
         "".join(e["text"] for e in voiced_span)
-        if (is_numeric or is_readable_compound)
+        if (is_numeric or is_readable_compound or is_english_compound)
         else token_furigana
     )
     return WordAccentResult(
@@ -565,8 +612,10 @@ def _fallback_word(token: WordResult) -> WordAccentResult:
     return _build_word_result(token, [])
 
 
-async def align_accent(
-    furigana_results: list[WordResult], accent_results: list[dict[str, Any]]
+def _align_accent(
+    furigana_results: list[WordResult],
+    accent_results: list[dict[str, Any]],
+    expected_mora_counts: list[int | None] | None = None,
 ) -> list[WordAccentResult]:
     """Align tokens with OpenJTalk per-mora entries via global DP.
 
@@ -602,6 +651,11 @@ async def align_accent(
         )
         token_kinds.append((is_num, is_pct, is_compound, is_eng))
     accent_texts = [e["text"] for e in accent_results]
+    numeric_targets = (
+        expected_mora_counts
+        if expected_mora_counts is not None
+        else _numeric_mora_targets(furigana_results, token_kinds, accent_texts)
+    )
 
     # dp[i][j] = best cost aligning tokens [0..i) to accent entries [0..j).
     dp: list[list[float]] = [[_INF] * (m + 1) for _ in range(n + 1)]
@@ -611,11 +665,31 @@ async def align_accent(
     for i in range(n):
         token = furigana_results[i]
         is_num, is_pct, is_compound, is_eng = token_kinds[i]
+        numeric_target = numeric_targets[i]
         for j in range(m + 1):
             base = dp[i][j]
             if base == _INF:
                 continue
-            k_limit = min(_K_MAX, m - j)
+            token_limit = _K_MAX
+            if is_num:
+                token_limit = max(token_limit, len(token.surface) * 4)
+                if numeric_target is not None:
+                    token_limit = max(token_limit, numeric_target)
+            elif is_pct:
+                token_limit = 1
+            elif is_compound:
+                token_limit = max(token_limit, len(token.surface) * 4 + 8)
+            elif is_eng:
+                token_limit = max(token_limit, len(token.surface) * 4)
+            elif token.base is None and token.pos is None:
+                token_limit = max(token_limit, len(token.surface) * 4 + 4)
+            else:
+                # The kana match rejects spans whose normalized text length
+                # differs by more than three characters. Since each OpenJTalk
+                # entry contributes one mora, larger spans cannot produce a
+                # finite cost and only multiply the DP search space.
+                token_limit = min(_K_MAX, len(_split_morae(token.furigana)) + 3)
+            k_limit = min(token_limit, m - j)
             for k in range(0, k_limit + 1):
                 cost = _match_cost(
                     token,
@@ -627,22 +701,15 @@ async def align_accent(
                 )
                 if cost == _INF:
                     continue
+                if (is_num or is_compound or is_eng) and numeric_target is not None:
+                    cost += 0.01 * abs(k - numeric_target)
                 new_cost = base + cost
                 if new_cost < dp[i + 1][j + k]:
                     dp[i + 1][j + k] = new_cost
                     back[i + 1][j + k] = j
 
-    # Pick the best terminal state. Prefer fully consuming OpenJTalk; otherwise
-    # take the cheapest end (trailing empty entries get inherited for free
-    # by the previous token's span since their text contributes nothing to
-    # edit distance).
     best_j = m
     best_cost = dp[n][m]
-    if best_cost == _INF:
-        for j in range(m + 1):
-            if dp[n][j] < best_cost:
-                best_cost = dp[n][j]
-                best_j = j
 
     if best_cost == _INF:
         logger.error(
@@ -668,3 +735,19 @@ async def align_accent(
         _build_word_result(furigana_results[i], accent_results[s:e])
         for i, (s, e) in enumerate(spans)
     ]
+
+
+async def align_accent(
+    furigana_results: list[WordResult],
+    accent_results: list[dict[str, Any]],
+    expected_mora_counts: list[int | None] | None = None,
+) -> list[WordAccentResult]:
+    def run() -> list[WordAccentResult]:
+        with _ALIGN_LOCK:
+            return _align_accent(
+                furigana_results,
+                accent_results,
+                expected_mora_counts,
+            )
+
+    return await asyncio.to_thread(run)
