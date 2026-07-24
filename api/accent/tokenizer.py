@@ -27,7 +27,12 @@ import fugashi
 import jaconv
 
 from api.accent.models import WordResult
-from api.accent.preprocess import NUMERIC_PATTERN, SYMBOL_READINGS
+from api.accent.preprocess import (
+    NUMERIC_PATTERN,
+    READABLE_COMPOUND_RE,
+    READABLE_SYMBOLS,
+    SYMBOL_READINGS,
+)
 
 _UNIDIC_NULL = "*"
 
@@ -162,10 +167,9 @@ def _flush_alphanumeric_run(buf: list[WordResult]) -> WordResult:
     acronym, not a Japanese morpheme, so kernel / POS hints don't apply.
     """
     surface = "".join(w.surface for w in buf)
-    furigana = "".join(w.furigana or w.surface for w in buf)
     return WordResult(
         surface=surface,
-        furigana=furigana,
+        furigana=surface,
         base=None,
         pos=None,
         pos1=None,
@@ -260,7 +264,7 @@ def tag_local(text: str) -> list[WordResult]:
             # below only if the shape is `\d+(\.\d+)?`, so they spill
             # back into individual tokens unchanged.
             joined = "".join(w.surface for w in run_buf)
-            if NUMERIC_PATTERN.match(joined):
+            if NUMERIC_PATTERN.match(joined) or READABLE_COMPOUND_RE.match(joined):
                 parsed.append(_flush_decimal_run(run_buf))
             else:
                 parsed.extend(run_buf)
@@ -307,6 +311,12 @@ def tag_local(text: str) -> list[WordResult]:
         is_digit = _is_digit_piece(surface)
         is_bridge = _is_bridge_piece(surface)
         leading_space = _leading_space(tok)
+
+        if run_buf and not leading_space and surface in READABLE_SYMBOLS:
+            joined = "".join(item.surface for item in run_buf)
+            if NUMERIC_PATTERN.match(joined) or READABLE_COMPOUND_RE.match(joined):
+                run_buf.append(word)
+                continue
 
         # Bridge (`-` / `_`) joins the run only when (a) we're mid-run,
         # (b) no leading whitespace, AND (c) the NEXT token is itself

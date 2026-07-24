@@ -27,6 +27,7 @@ import jaconv
 from api.accent.models import AccentInfo, WordAccentResult, WordResult
 from api.accent.preprocess import (
     NUMERIC_PATTERN,
+    NUMERIC_UNIT_RE,
     READABLE_COMPOUND_RE,
     SYMBOL_READINGS,
 )
@@ -239,11 +240,6 @@ def flatten_heiban_particle_accent(
     return out
 
 
-def _has_kana(s: str) -> bool:
-    """True if `s` contains at least one hiragana or katakana char."""
-    return any(0x3040 <= ord(c) <= 0x30FF for c in s)
-
-
 def apply_furigana_toggles(
     result: list[WordAccentResult],
     render_english: bool,
@@ -252,11 +248,8 @@ def apply_furigana_toggles(
     """Suppress furigana on English / katakana tokens when their toggle is off.
 
     English (toggle off): clear both furigana AND accent — foreign
-    tokens carry no meaningful Japanese pitch contour. Skipped when
-    the token already carries a Japanese reading: unit compounds like
-    `53mm` (furi=みりめーとる) and `33m/s` (furi=めーとるまいびょう)
-    have ASCII surfaces but Japanese furigana fugashi/UniDic resolved
-    for the unit — wiping those would lose the unit reading.
+    tokens carry no meaningful Japanese pitch contour. Numeric SI-unit
+    compounds such as `53mm` keep their Japanese reading.
 
     Katakana (toggle off): clear the top-level `furigana` AND every
     `AccentInfo.furigana` — clients that draw ruby from the per-mora
@@ -277,7 +270,7 @@ def apply_furigana_toggles(
         if (
             not render_english
             and _is_pure_english_surface(surface)
-            and not _has_kana(w.furigana)
+            and not NUMERIC_UNIT_RE.match(surface)
         ):
             out.append(
                 WordAccentResult(
