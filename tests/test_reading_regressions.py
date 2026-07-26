@@ -5,11 +5,12 @@ import re
 import pytest
 
 from api.accent import reading_overrides
-from api.accent.models import WordAccentResult, WordResult
+from api.accent.models import AccentInfo, WordAccentResult, WordResult
 from api.accent.reading_overrides import (
     FuriganaOverride,
     ReplacementToken,
     apply_accent_overrides,
+    apply_accent_patches,
     apply_furigana_overrides,
 )
 
@@ -164,3 +165,30 @@ def test_weekday_override_accepts_fullwidth_parentheses() -> None:
         ("土", "ど"),
         ("）", "）"),
     ]
+
+
+def test_suffix_accent_patch_preserves_strong_mode_metadata() -> None:
+    # Given
+    token = WordAccentResult(
+        surface="ます",
+        furigana="ます",
+        accent=[
+            AccentInfo(furigana="ま", accent_marking_type=1, length=1),
+            AccentInfo(furigana="す", accent_marking_type=1, length=1),
+        ],
+        base="ます",
+        pos="助動詞",
+        conjugation_type="助動詞-マス",
+        conjugation_form="終止形-一般",
+        lexical_kernel=1,
+        lexical_kernel_alts=[1, 0],
+        kernel_absorbed=True,
+    )
+
+    # When
+    result = apply_accent_patches([token])[0]
+
+    # Then
+    assert result.lexical_kernel == 1
+    assert result.lexical_kernel_alts == [1, 0]
+    assert result.kernel_absorbed is True

@@ -743,6 +743,9 @@ def _patch_first_mora_fall(token: WordAccentResult) -> WordAccentResult:
         pos1=token.pos1,
         conjugation_type=token.conjugation_type,
         conjugation_form=token.conjugation_form,
+        lexical_kernel=token.lexical_kernel,
+        lexical_kernel_alts=token.lexical_kernel_alts,
+        kernel_absorbed=token.kernel_absorbed,
     )
 
 
