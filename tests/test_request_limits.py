@@ -4,10 +4,12 @@ import asyncio  # noqa: F401  # noqa: ANYIO_OK
 import threading
 from collections.abc import AsyncIterator
 from types import SimpleNamespace
+from typing import cast
 
 import pytest
 from fastapi import HTTPException
 from httpx import ASGITransport, AsyncClient
+from starlette.requests import Request as StarletteRequest
 from starlette.types import Message, Scope
 
 from api.accent import routes
@@ -22,8 +24,8 @@ async def _never_disconnect() -> Message:
     raise AssertionError("unreachable")
 
 
-def _raw_request() -> SimpleNamespace:
-    return SimpleNamespace(receive=_never_disconnect)
+def _raw_request() -> StarletteRequest:
+    return cast(StarletteRequest, SimpleNamespace(receive=_never_disconnect))
 
 
 class ResponseStartError(RuntimeError):
@@ -165,7 +167,7 @@ def test_collected_request_cancellation_cancels_processing(
             return {"type": "http.disconnect"}
 
         monkeypatch.setattr(routes, "_mark_accent", blocked_processing)
-        raw_request = SimpleNamespace(receive=disconnect)
+        raw_request = cast(StarletteRequest, SimpleNamespace(receive=disconnect))
 
         with pytest.raises(asyncio.CancelledError):
             await routes.mark_accent(Request(text="猫"), raw_request)
