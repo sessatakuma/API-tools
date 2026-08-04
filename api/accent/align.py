@@ -41,6 +41,8 @@ from api.accent.preprocess import (
 )
 
 logger = logging.getLogger("api")
+# Alignment is pure Python, but serializing this CPU-bound DP avoids several
+# worker threads contending for the GIL while native OpenJTalk work is active.
 _ALIGN_LOCK = threading.Lock()
 
 punctuation_marks = set(

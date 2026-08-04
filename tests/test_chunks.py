@@ -127,6 +127,39 @@ def test_degenerate_long_line_is_split_with_sequential_subidx() -> None:
     assert all(len(c[2]) <= MAX_CHUNK_CHARS for c in chunks)
 
 
+def test_boundary_tokenizer_failure_falls_back_to_hard_splits(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fail_tokenizer(_text: str) -> list[WordResult]:
+        raise RuntimeError("dictionary unavailable")
+
+    monkeypatch.setattr(chunking_module, "tag_local", fail_tokenizer)
+    line = "あ" * (MAX_CHUNK_CHARS + 1)
+
+    chunks = _build_chunks(line)
+
+    assert "".join(chunk[2] for chunk in chunks) == line
+    assert all(len(chunk[2]) <= MAX_CHUNK_CHARS for chunk in chunks)
+
+
+def test_impossibly_large_request_skips_tokenizer(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    called = False
+
+    def record_tokenizer(_text: str) -> list[WordResult]:
+        nonlocal called
+        called = True
+        return []
+
+    monkeypatch.setattr(chunking_module, "tag_local", record_tokenizer)
+
+    chunks = _build_chunks("あ" * (MAX_CHUNK_CHARS * 64 + 1))
+
+    assert len(chunks) > chunking_module.MAX_CHUNKS_PER_REQUEST
+    assert not called
+
+
 def test_subidx_continues_across_sentence_and_split() -> None:
     # First a normal sentence, then an oversized terminator-free tail on the
     # same line: sub_idx must stay unique/monotonic across both.

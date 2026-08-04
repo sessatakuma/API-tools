@@ -310,7 +310,11 @@ _NUMERIC_UNIT_BODY = (
     r"hz|db|nm|m|g|l|w|v|a|s|h)"
 )
 NUMERIC_UNIT_RE = re.compile(rf"^{_NUMERIC_UNIT_BODY}$", re.IGNORECASE)
-_NUMERIC_UNIT_TEXT_RE = re.compile(_NUMERIC_UNIT_BODY, re.IGNORECASE)
+# Do not retain a unit-looking substring inside an ASCII identifier (for
+# example Model10mph or abc53mmdef) when hiding English from OpenJTalk.
+_NUMERIC_UNIT_TEXT_RE = re.compile(
+    rf"(?<![A-Za-z0-9_]){_NUMERIC_UNIT_BODY}(?![A-Za-z0-9_])", re.IGNORECASE
+)
 
 
 def clean_hidden_english(text: str) -> str:

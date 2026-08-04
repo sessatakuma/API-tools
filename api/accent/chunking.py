@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from collections.abc import Callable, Coroutine
 from typing import Any, AsyncGenerator, TypeVar
 
@@ -9,6 +10,7 @@ from api.accent.preprocess import MAX_CHUNK_CHARS, cap_chunk_length, split_sente
 from api.accent.tokenizer import tag_local
 
 MAX_CHUNKS_PER_REQUEST = 64
+logger = logging.getLogger("api")
 _process_chunk_loop: asyncio.AbstractEventLoop | None = None
 _process_chunk_limiter: asyncio.Semaphore | None = None
 T = TypeVar("T")
@@ -60,6 +62,15 @@ def _token_boundaries(text: str) -> set[int]:
 
 
 async def build_chunks(text: str) -> list[tuple[int, int, str]]:
+    # Every non-blank input character is emitted in a chunk no longer than the
+    # cap.  Reject inputs that must exceed the request limit before invoking
+    # the comparatively expensive UniDic tokenizer.
+    if sum(len(line) for line in text.split("\n") if line.strip()) > (
+        MAX_CHUNKS_PER_REQUEST * MAX_CHUNK_CHARS
+    ):
+        # Callers use the chunk count to produce the existing 413 response.
+        return [(0, index, "") for index in range(MAX_CHUNKS_PER_REQUEST + 1)]
+
     chunks: list[tuple[int, int, str]] = []
     for line_idx, line in enumerate(text.split("\n")):
         if not line.strip():
@@ -68,9 +79,14 @@ async def build_chunks(text: str) -> list[tuple[int, int, str]]:
         for sentence in split_sentences(line):
             boundaries = None
             if len(sentence) > MAX_CHUNK_CHARS:
-                boundaries = await _run_with_permit(
-                    lambda: asyncio.to_thread(_token_boundaries, sentence)
-                )
+                try:
+                    boundaries = await _run_with_permit(
+                        lambda: asyncio.to_thread(_token_boundaries, sentence)
+                    )
+                except Exception:  # noqa: BLE001
+                    # Token boundaries improve split quality but are not
+                    # required for correctness; cap_chunk_length hard-cuts.
+                    logger.exception("Tokenizer failed while finding chunk boundaries")
             for piece in cap_chunk_length(sentence, boundaries):
                 chunks.append((line_idx, sub_idx, piece))
                 sub_idx += 1

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from api.accent.models import WordAccentResult
 from api.accent.preprocess import (
+    clean_hidden_english,
     restore_number_commas,
     restore_urls,
     restore_x_between_digits,
@@ -9,6 +10,11 @@ from api.accent.preprocess import (
     strip_urls,
     strip_x_between_digits,
 )
+
+
+def test_clean_hidden_english_keeps_only_standalone_numeric_units() -> None:
+    assert clean_hidden_english("Model10mph猫 abc53mmdef猫") == "10猫 53猫"
+    assert clean_hidden_english("53mm猫 3kgの荷物") == "53mm猫 3kgの荷物"
 
 
 def _word(surface: str) -> WordAccentResult:

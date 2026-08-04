@@ -24,6 +24,7 @@ from typing import Any, AsyncIterator
 
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
+from starlette.requests import Request as StarletteRequest
 from starlette.types import Receive, Scope, Send
 
 from api.accent.chunking import MAX_CHUNKS_PER_REQUEST, build_chunks, schedule_chunks
@@ -32,6 +33,8 @@ from api.accent.models import AccentResponse, ErrorInfo, Request, WordAccentResu
 logger = logging.getLogger("api")
 MAX_ACTIVE_ACCENT_REQUESTS = 4
 ACCENT_REQUEST_TIMEOUT_SECONDS = 30.0
+# A threading semaphore gives non-blocking, immediate admission: a full
+# service returns 503 instead of awaiting an asyncio semaphore in the loop.
 _REQUEST_LIMITER = threading.BoundedSemaphore(MAX_ACTIVE_ACCENT_REQUESTS)
 
 tags_metadata = [
@@ -70,6 +73,7 @@ class _AdmissionStreamingResponse(StreamingResponse):
 @accent_router.post("/MarkAccent/", tags=["MarkAccent"], response_model=AccentResponse)
 async def mark_accent(
     request: Request,
+    raw_request: StarletteRequest,
 ) -> AccentResponse:
     """Run the same chunked pipeline as `/MarkAccent/stream/`, but
     wait for every chunk to finish and return a single AccentResponse whose
@@ -85,7 +89,7 @@ async def mark_accent(
     try:
         try:
             async with asyncio.timeout(ACCENT_REQUEST_TIMEOUT_SECONDS):
-                return await _mark_accent(request)
+                return await _mark_accent_until_disconnect(request, raw_request)
         except TimeoutError as error:
             raise HTTPException(
                 status_code=504,
@@ -93,6 +97,32 @@ async def mark_accent(
             ) from error
     finally:
         request_limiter.release()
+
+
+async def _mark_accent_until_disconnect(
+    request: Request, raw_request: StarletteRequest
+) -> AccentResponse:
+    """Cancel unadmitted chunk work when the collected-response client leaves."""
+
+    processing = asyncio.create_task(_mark_accent(request))
+    disconnected = asyncio.create_task(_wait_for_disconnect(raw_request.receive))
+    done, _pending = await asyncio.wait(
+        {processing, disconnected}, return_when=asyncio.FIRST_COMPLETED
+    )
+    if processing in done:
+        disconnected.cancel()
+        await asyncio.gather(disconnected, return_exceptions=True)
+        return await processing
+
+    processing.cancel()
+    await asyncio.gather(processing, return_exceptions=True)
+    raise asyncio.CancelledError
+
+
+async def _wait_for_disconnect(receive: Receive) -> None:
+    while True:
+        if (await receive())["type"] == "http.disconnect":
+            return
 
 
 async def _mark_accent(request: Request) -> AccentResponse:
