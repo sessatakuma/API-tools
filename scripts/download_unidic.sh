@@ -20,11 +20,16 @@ set -euo pipefail
 
 # ── Config ────────────────────────────────────────────────────────────
 
-# Mapping: tag → (NINJAL archive path, version string written to dicdir/version)
+# Mapping: tag → (NINJAL archive path, version marker, project-verified SHA-256).
+#
+# These digests were computed from archives downloaded over HTTPS on 2026-08-04,
+# then validated with `unzip -t` and by checking that each archive contains
+# `sys.dic`. NINJAL does not publish checksums, so this is a project trust-on-
+# first-use pin: it detects later replacement or corruption of a fixed archive.
 declare -A DICT_URLS
-DICT_URLS[cwj-2025-12-31]="unidic_archive/2512/unidic-cwj-202512.zip|cwj-3.1.0+2025-12-31"
-DICT_URLS[csj-2025-12-31]="unidic_archive/2512/unidic-csj-202512.zip|csj-3.1.0+2025-12-31"
-DICT_URLS[cwj-2021-08-31]="unidic_archive/2108/unidic-cwj-3.1.0.zip|cwj-3.1.0+2021-08-31"
+DICT_URLS[cwj-2025-12-31]="unidic_archive/2512/unidic-cwj-202512.zip|cwj-3.1.0+2025-12-31|d94216b589d15d05c408ed59abc5259086703ebbac14e225b5314e4cd106c4db"
+DICT_URLS[csj-2025-12-31]="unidic_archive/2512/unidic-csj-202512.zip|csj-3.1.0+2025-12-31|e02f9d39bef87b2d8e80d6f09993139e6ee8662461fc7a518ba4ede28fdbc0c5"
+DICT_URLS[cwj-2021-08-31]="unidic_archive/cwj/3.1.0/unidic-cwj-3.1.0.zip|cwj-3.1.0+2021-08-31|340651aa78cc02caf690f94de8809d41c4acda694226517884ecad81c51523fc"
 
 # Backward compat: bare date tags default to CWJ.
 DICT_URLS[2025-12-31]=${DICT_URLS[cwj-2025-12-31]}
@@ -44,7 +49,7 @@ if [[ ! -v "DICT_URLS[$VERSION_TAG]" ]]; then
     exit 1
 fi
 
-IFS="|" read -r DICT_PATH DICT_VERSION <<< "${DICT_URLS[$VERSION_TAG]}"
+IFS="|" read -r DICT_PATH DICT_VERSION DICT_SHA256 <<< "${DICT_URLS[$VERSION_TAG]}"
 DICT_URL="${NINJAL_BASE}/${DICT_PATH}"
 
 # ── Locate dicdir ────────────────────────────────────────────────────
@@ -72,6 +77,13 @@ ZIPFILE="${TMPDIR}/unidic.zip"
 
 echo "Downloading (~700 MB compressed download, ~1.3 GB installed)..."
 curl -fSL --progress-bar -o "$ZIPFILE" "$DICT_URL"
+
+echo "Verifying SHA-256..."
+if ! printf "%s  %s\\n" "$DICT_SHA256" "$ZIPFILE" | sha256sum --check --status; then
+    echo "ERROR: UniDic archive checksum mismatch; refusing to extract." >&2
+    rm -rf "$TMPDIR"
+    exit 1
+fi
 
 # ── Extract ───────────────────────────────────────────────────────────
 
