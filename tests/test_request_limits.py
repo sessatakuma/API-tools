@@ -151,6 +151,7 @@ def test_collected_request_timeout_releases_request_slot(
             except asyncio.CancelledError:
                 receive_cancelled.set()
                 raise
+            raise AssertionError("unreachable")
 
         monkeypatch.setattr(routes, "_mark_accent", never_finishes)
         raw_request = cast(
