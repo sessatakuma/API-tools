@@ -135,15 +135,33 @@ def test_collected_request_timeout_releases_request_slot(
         limiter = threading.BoundedSemaphore(1)
         monkeypatch.setattr(routes, "_REQUEST_LIMITER", limiter)
         monkeypatch.setattr(routes, "ACCENT_REQUEST_TIMEOUT_SECONDS", 0.01)
+        processing_cancelled = asyncio.Event()
+        receive_cancelled = asyncio.Event()
 
         async def never_finishes(_request: Request) -> None:
-            await asyncio.Event().wait()
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                processing_cancelled.set()
+                raise
+
+        async def never_disconnects() -> Message:
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                receive_cancelled.set()
+                raise
 
         monkeypatch.setattr(routes, "_mark_accent", never_finishes)
+        raw_request = cast(
+            StarletteRequest, SimpleNamespace(receive=never_disconnects)
+        )
 
         with pytest.raises(HTTPException) as caught:
-            await routes.mark_accent(Request(text="猫"), _raw_request())
+            await routes.mark_accent(Request(text="猫"), raw_request)
         assert caught.value.status_code == 504
+        assert processing_cancelled.is_set()
+        assert receive_cancelled.is_set()
         assert limiter.acquire(blocking=False)
         limiter.release()
 

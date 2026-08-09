@@ -14,7 +14,9 @@ from api.accent.preprocess import (
 
 def test_clean_hidden_english_keeps_only_standalone_numeric_units() -> None:
     assert clean_hidden_english("Model10mph猫 abc53mmdef猫") == "10猫 53猫"
+    assert clean_hidden_english("RTX-4090m猫 53mm-pro猫") == "-4090猫 53-猫"
     assert clean_hidden_english("53mm猫 3kgの荷物") == "53mm猫 3kgの荷物"
+    assert clean_hidden_english("-53mm猫") == "-53mm猫"
 
 
 def _word(surface: str) -> WordAccentResult:

@@ -106,17 +106,18 @@ async def _mark_accent_until_disconnect(
 
     processing = asyncio.create_task(_mark_accent(request))
     disconnected = asyncio.create_task(_wait_for_disconnect(raw_request.receive))
-    done, _pending = await asyncio.wait(
-        {processing, disconnected}, return_when=asyncio.FIRST_COMPLETED
-    )
-    if processing in done:
-        disconnected.cancel()
-        await asyncio.gather(disconnected, return_exceptions=True)
-        return await processing
+    try:
+        done, _pending = await asyncio.wait(
+            {processing, disconnected}, return_when=asyncio.FIRST_COMPLETED
+        )
+        if processing in done:
+            return await processing
 
-    processing.cancel()
-    await asyncio.gather(processing, return_exceptions=True)
-    raise asyncio.CancelledError
+        raise asyncio.CancelledError
+    finally:
+        processing.cancel()
+        disconnected.cancel()
+        await asyncio.gather(processing, disconnected, return_exceptions=True)
 
 
 async def _wait_for_disconnect(receive: Receive) -> None:
