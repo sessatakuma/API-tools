@@ -154,9 +154,7 @@ def test_collected_request_timeout_releases_request_slot(
             raise AssertionError("unreachable")
 
         monkeypatch.setattr(routes, "_mark_accent", never_finishes)
-        raw_request = cast(
-            StarletteRequest, SimpleNamespace(receive=never_disconnects)
-        )
+        raw_request = cast(StarletteRequest, SimpleNamespace(receive=never_disconnects))
 
         with pytest.raises(HTTPException) as caught:
             await routes.mark_accent(Request(text="猫"), raw_request)
