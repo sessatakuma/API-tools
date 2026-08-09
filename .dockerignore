@@ -10,8 +10,18 @@ __pycache__/
 .venv/
 .env
 .env.*
-!.env.example
+tests/
 README.md
 Procfile
 render.yaml
 vercel.json
+
+# Local tooling, scratch, and editor state — never needed in the image
+.claude/
+.claude
+tmp/
+data/
+output/
+.idea/
+.vscode/
+.zed/
