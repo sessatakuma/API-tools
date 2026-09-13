@@ -1,0 +1,69 @@
+---
+name: Docker Build Check
+
+# Build the image on PRs (no push) so a broken Dockerfile — most importantly
+# the dict-bake layers that make the runtime self-contained/offline
+# (open_jtalk_dic via pyopenjtalk, and the UniDic dict — ~700 MB compressed
+# download, ~1.3 GB installed — from scripts/download_unidic.sh) — fails the
+# PR instead of the release build.
+# The smoke-test step then runs the built image with `--network none` and
+# exercises BOTH baked dictionaries: the OpenJTalk open_jtalk_dic (via
+# pyopenjtalk) AND the fugashi/UniDic dicdir (via the tokeniser). A broken
+# or missing download of either dict fails the gate offline.
+on:  # yamllint disable-line rule:truthy
+  workflow_call:
+  pull_request:
+    branches: ["main", "dev"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: docker-build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build image (no push)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Build image
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: ./Dockerfile
+          platforms: linux/amd64
+          push: false
+          load: true
+          tags: api-tools:pr-${{ github.event.pull_request.number || github.run_id }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Smoke-test the accent pipeline in the built image
+        run: |
+          image=api-tools:pr-${{ github.event.pull_request.number || github.run_id }}
+          container=api-tools-smoke-${{ github.run_id }}
+          trap 'docker rm -f "$container" >/dev/null 2>&1 || true' EXIT
+          docker run -d --name "$container" --network none --read-only --tmpfs /tmp \
+            -e PYTHONDONTWRITEBYTECODE=1 \
+            "$image"
+          for attempt in $(seq 1 30); do
+            if docker exec "$container" python -c \
+              "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/openapi.json', timeout=2)"; then
+              break
+            fi
+            if [[ "$attempt" == 30 ]]; then
+              docker logs "$container"
+              exit 1
+            fi
+            sleep 1
+          done
+          docker exec "$container" python -c \
+            "import json, urllib.request; request=urllib.request.Request('http://127.0.0.1:8000/api/MarkAccent/', data=json.dumps({'text':'東京'}).encode(), headers={'Content-Type':'application/json'}); response=json.load(urllib.request.urlopen(request, timeout=30)); assert response['status'] == 200 and response['result']"

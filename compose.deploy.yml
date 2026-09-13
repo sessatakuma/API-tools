@@ -1,0 +1,28 @@
+---
+# Production compose for API-tools. Unlike docker-compose.yml (local dev, which
+# builds from source and publishes a host port), this runs a pre-built image as
+# an internal service on the shared network and applies runtime hardening.
+# Mirrors jpcorrect-backend/compose.deploy.yml.
+services:
+    api-tools:
+        image: ${API_TOOLS_IMAGE:-ghcr.io/sessatakuma/api-tools:stable}
+        container_name: jpcorrect-api-tools
+        expose:
+            - "8000"
+        # Runtime hardening: the image already runs as a non-root user
+        # (appuser, see Dockerfile). The app writes nothing to disk — both
+        # dictionaries are baked in and read-only, and PYTHONDONTWRITEBYTECODE
+        # is set — so the rootfs can be read-only with /tmp on a tmpfs. Verified
+        # offline in the docker-build CI smoke (--read-only --tmpfs /tmp).
+        read_only: true
+        tmpfs:
+            - /tmp
+        security_opt:
+            - no-new-privileges:true
+        networks:
+            - jpcorrect-shared
+        restart: unless-stopped
+
+networks:
+    jpcorrect-shared:
+        external: true

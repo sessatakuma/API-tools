@@ -2,8 +2,20 @@ FROM python:3.11-slim AS builder
 
 WORKDIR /app
 
-# Install uv for fast dependency management (pinned for reproducible builds)
-RUN pip install --no-cache-dir "uv==0.9.0"
+# Install uv for fast dependency management (pinned for reproducible builds),
+# curl for downloading the NINJAL UniDic archive (scripts/download_unidic.sh
+# line ~74), and unzip for extracting it (Deflate64-compressed).
+#
+# build-essential (g++/make) and cmake are required to compile pyopenjtalk:
+# it ships source-only on PyPI (no wheels for any arch) and builds its bundled
+# OpenJTalk/HTS-engine C++ from sdist during `uv sync` below. Without them the
+# build fails at cmake configure ("no CXX compiler"). This is a builder-stage
+# cost only — the toolchain never lands in the slim runtime image.
+RUN pip install --no-cache-dir "uv==0.9.0" \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends \
+       curl unzip build-essential cmake \
+    && rm -rf /var/lib/apt/lists/*
 
 # Copy dependency files first for better layer caching
 COPY pyproject.toml uv.lock ./
@@ -11,11 +23,30 @@ COPY pyproject.toml uv.lock ./
 # Install dependencies using uv
 RUN uv sync --frozen --no-dev --no-install-project
 
+# Download the OpenJTalk dictionary (open_jtalk_dic_utf_8 ~23 MB) into the
+# venv at build time. pyopenjtalk fetches it lazily on first frontend call;
+# baking it here means the runtime (unprivileged appuser, read-only app dir,
+# possibly offline) never has to download it. It lands inside the pyopenjtalk
+# package under /app/.venv, which is copied wholesale into the final image.
+# Own layer (gated by uv.lock) so app-code edits don't bust the download.
+RUN /app/.venv/bin/python -c "import pyopenjtalk; pyopenjtalk.extract_fullcontext('テスト')"
+
+# Download and install the UniDic dictionary into the venv so the image is
+# self-contained — the `unidic` pip package ships the loader but not the
+# dicdir, and fugashi.Tagger() fails at runtime without it. UniDic CWJ is
+# a ~700 MB compressed download that expands to ~1.3 GB installed.
+# Uses scripts/download_unidic.sh so local dev and Docker share the same
+# download logic.  Kept as its own layer (before COPY . .) so app-code
+# edits don't bust the download cache; only re-runs when the script or
+# uv.lock changes.
+COPY scripts/download_unidic.sh scripts/
+RUN VIRTUAL_ENV=/app/.venv bash scripts/download_unidic.sh
+
 COPY . .
 
 # Compile only our app code (skip .venv) and drop the .py sources
-RUN python -m compileall -b -q main.py api config \
-    && find main.py api config -name "*.py" -delete
+RUN python -m compileall -b -q main.py api \
+    && find main.py api -name "*.py" -delete
 
 FROM python:3.11-slim
 
@@ -30,11 +61,16 @@ WORKDIR /app
 COPY --from=builder /app/.venv /app/.venv
 COPY --from=builder /app/main.pyc /app/main.pyc
 COPY --from=builder /app/api /app/api
-COPY --from=builder /app/config /app/config
 
 # Set PATH to use venv binaries
 ENV PATH="/app/.venv/bin:$PATH"
 ENV PYTHONUNBUFFERED=1
+# Don't attempt to write .pyc caches at runtime — app code is already compiled
+# to .pyc in the builder, and this lets the container run with a read-only
+# rootfs (see compose.deploy.yml) without Python tripping on cache writes.
+ENV PYTHONDONTWRITEBYTECODE=1
+# Local timezone so log timestamps match the deployment (tzdata ships in slim).
+ENV TZ=Asia/Taipei
 
 EXPOSE 8000
 
