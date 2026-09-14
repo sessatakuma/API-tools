@@ -16,22 +16,140 @@ concurrency:
   group: cd-${{ github.ref }}
   cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/v') }}
 
+env:
+  REGISTRY: ghcr.io
+  # Lowercase, hardcoded: GHCR image names must be lowercase, and
+  # github.repository would be `sessatakuma/API-tools` (mixed case).
+  # Must match deploy/compose.yml's api-tools image in jpcorrect-backend.
+  IMAGE_NAME: sessatakuma/api-tools
+
 jobs:
   tests:
     name: Validate source
     uses: ./.github/workflows/tests.yml
 
-  build-and-push:
-    name: Build and push image to GHCR
+  build:
+    name: Build and smoke-test ${{ matrix.platform }}
     needs: [tests]
-    runs-on: ubuntu-latest
-    env:
-      REGISTRY: ghcr.io
-      # Lowercase, hardcoded: GHCR image names must be lowercase, and
-      # github.repository would be `sessatakuma/API-tools` (mixed case).
-      # Must match deploy/compose.yml's api-tools image in jpcorrect-backend.
-      IMAGE_NAME: sessatakuma/api-tools
+    # Each arch builds on a runner of its own architecture, so no QEMU is
+    # involved. That matters because pyopenjtalk ships source-only on PyPI
+    # (see Dockerfile:9-13) and compiles its bundled OpenJTalk/HTS-engine C++
+    # during `uv sync` — CPU-bound work that ran roughly an order of magnitude
+    # slower under emulation (~+12 min per cold arm64 build). Building
+    # natively also gives each arch a single-platform image it can `load` and
+    # actually run, so the arm64 image that ships to the Ampere deploy host is
+    # smoke-tested rather than published sight-unseen.
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      # Let both arches report: a failure on one shouldn't hide the other's
+      # result, and `merge` gates publication on both succeeding anyway.
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            platform: linux/amd64
+            arch: amd64
+          - runner: ubuntu-24.04-arm  # free for public repos
+            platform: linux/arm64
+            arch: arm64
     steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v4
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v6
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+
+      - name: Build image for smoke test
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: ./Dockerfile
+          platforms: ${{ matrix.platform }}
+          push: false
+          load: true
+          tags: api-tools:smoke-${{ matrix.arch }}
+          labels: ${{ steps.meta.outputs.labels }}
+          # Per-arch cache scope: the two matrix jobs run concurrently and
+          # would otherwise race writing the same `type=gha` scope.
+          cache-from: type=gha,scope=cd-${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=cd-${{ matrix.arch }}
+
+      - name: Smoke-test production lifecycle offline
+        run: |
+          image=api-tools:smoke-${{ matrix.arch }}
+          container=api-tools-release-smoke-${{ github.run_id }}-${{ matrix.arch }}
+          trap 'docker rm -f "$container" >/dev/null 2>&1 || true' EXIT
+          docker run -d --name "$container" --network none --read-only --tmpfs /tmp \
+            -e PYTHONDONTWRITEBYTECODE=1 \
+            "$image"
+          for attempt in $(seq 1 30); do
+            if docker exec "$container" python -c \
+              "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/openapi.json', timeout=2)"; then
+              break
+            fi
+            if [[ "$attempt" == 30 ]]; then
+              docker logs "$container"
+              exit 1
+            fi
+            sleep 1
+          done
+          docker exec "$container" python -c \
+            "import json, urllib.request; request=urllib.request.Request('http://127.0.0.1:8000/api/MarkAccent/', data=json.dumps({'text':'東京'}).encode(), headers={'Content-Type':'application/json'}); response=json.load(urllib.request.urlopen(request, timeout=30)); assert response['status'] == 200 and response['result']"
+
+      - name: Push smoke-tested image by digest
+        id: build
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: ./Dockerfile
+          platforms: ${{ matrix.platform }}
+          # Push untagged, addressed only by digest: `merge` stitches the
+          # per-arch digests into the tagged index once *both* smoke tests
+          # pass, so a broken arm64 image can never take `dev`/`stable`.
+          outputs: >-
+            type=image,name=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }},push-by-digest=true,name-canonical=true,push=true
+          provenance: true
+          sbom: true
+          labels: ${{ steps.meta.outputs.labels }}
+          # Every layer is already in the scope the smoke build just wrote, so
+          # this re-exports rather than rebuilds. No cache-to: nothing new.
+          cache-from: type=gha,scope=cd-${{ matrix.arch }}
+
+      - name: Export digest
+        run: |
+          mkdir -p /tmp/digests
+          digest='${{ steps.build.outputs.digest }}'
+          touch "/tmp/digests/${digest#sha256:}"
+
+      - name: Upload digest
+        uses: actions/upload-artifact@v7
+        with:
+          name: digest-${{ matrix.arch }}
+          path: /tmp/digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+  merge:
+    name: Publish multi-arch manifest
+    needs: [build]
+    runs-on: ubuntu-latest
+    steps:
+      # Serialising happens here rather than before the builds: only tagging is
+      # order-sensitive (an older run must not drag `stable` backwards), and
+      # the per-arch builds are free to run alongside an earlier run.
       - name: Wait for earlier CD runs before publishing a release
         if: startsWith(github.ref, 'refs/tags/v')
         env:
@@ -49,11 +167,12 @@ jobs:
             sleep 15
           done
 
-      - name: Checkout
-        uses: actions/checkout@v6
-
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v4
+      - name: Download digests
+        uses: actions/download-artifact@v8
+        with:
+          path: /tmp/digests
+          pattern: digest-*
+          merge-multiple: true
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
@@ -77,56 +196,28 @@ jobs:
             type=semver,pattern={{major}}.{{minor}}
             type=raw,value=stable,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
 
-      - name: Build amd64 image for smoke test
-        uses: docker/build-push-action@v7
-        with:
-          context: .
-          file: ./Dockerfile
-          # Smoke test runs on the runner, so this stage stays native amd64:
-          # buildx cannot `load` a multi-platform result into the daemon.
-          platforms: linux/amd64
-          push: false
-          load: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-
-      - name: Smoke-test production lifecycle offline
+      - name: Create and push multi-arch manifest
+        working-directory: /tmp/digests
         run: |
-          image=$(printf '%s\n' '${{ steps.meta.outputs.tags }}' | head -n 1)
-          container=api-tools-release-smoke-${{ github.run_id }}
-          trap 'docker rm -f "$container" >/dev/null 2>&1 || true' EXIT
-          docker run -d --name "$container" --network none --read-only --tmpfs /tmp \
-            -e PYTHONDONTWRITEBYTECODE=1 \
-            "$image"
-          for attempt in $(seq 1 30); do
-            if docker exec "$container" python -c \
-              "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/openapi.json', timeout=2)"; then
-              break
-            fi
-            if [[ "$attempt" == 30 ]]; then
-              docker logs "$container"
-              exit 1
-            fi
-            sleep 1
+          shopt -s nullglob
+          digests=(*)
+          if [[ ${#digests[@]} -eq 0 ]]; then
+            echo "No per-arch digests were downloaded" >&2
+            exit 1
+          fi
+          args=()
+          while IFS= read -r tag; do
+            args+=(--tag "$tag")
+          done < <(jq -r '.tags[]' <<<"$DOCKER_METADATA_OUTPUT_JSON")
+          # Each source is the single-platform index buildx pushed above: it
+          # carries the platform manifest plus its provenance/SBOM attestation
+          # manifests, and imagetools copies all of them into the merged index.
+          for digest in "${digests[@]}"; do
+            args+=("${REGISTRY}/${IMAGE_NAME}@sha256:${digest}")
           done
-          docker exec "$container" python -c \
-            "import json, urllib.request; request=urllib.request.Request('http://127.0.0.1:8000/api/MarkAccent/', data=json.dumps({'text':'東京'}).encode(), headers={'Content-Type':'application/json'}); response=json.load(urllib.request.urlopen(request, timeout=30)); assert response['status'] == 200 and response['result']"
+          docker buildx imagetools create "${args[@]}"
 
-      - name: Push smoke-tested image (amd64 + arm64)
-        uses: docker/build-push-action@v7
-        with:
-          context: .
-          file: ./Dockerfile
-          # arm64 so images run natively on the arm64 (Oracle Ampere) deploy
-          # host. amd64 layers come from the cache the smoke build just wrote,
-          # so only the arm64 half is rebuilt (under QEMU).
-          platforms: linux/amd64,linux/arm64
-          push: true
-          provenance: true
-          sbom: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+      - name: Inspect published index
+        run: |
+          docker buildx imagetools inspect \
+            "${REGISTRY}/${IMAGE_NAME}:${{ steps.meta.outputs.version }}"
