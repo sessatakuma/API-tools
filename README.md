@@ -16,10 +16,14 @@ network calls, external API keys, or `.env` setup required.
 |--|--|
 | `POST /api/MarkAccent/` | Mark pitch accent + furigana on the whole input, returns one `AccentResponse`. |
 | `POST /api/MarkAccent/stream/` | Same pipeline, streams one NDJSON object per `\n`-split sentence in input order. |
-| `POST /api/UsageQuery/HeadWords/` | Look up Yahoo Realtime/News headwords for a query (delegates to an external HTTP endpoint). |
-| `POST /api/UsageQuery/URL/` | Resolve headword references to URLs. |
-| `POST /api/DictQuery/` | JMdict dictionary lookup. |
-| `POST /api/SentenceQuery/` | Example-sentence search. |
+
+`MarkAccent` is the whole service. The `DictQuery`,
+`SentenceQuery` and `UsageQuery` endpoints that lived here previously
+were removed in #54: each was an HTML scrape of an external site
+(EDRDG JMdictDB, EDRDG WWWJDIC, Yahoo), all three saw little use, and
+JMdictDB moved behind a password gate that broke `DictQuery`
+outright. Nothing in the service makes a network call at request time
+any more.
 
 The MarkFurigana endpoint that lived in earlier versions of the
 service was removed during the Yahoo MA → local fugashi migration;
@@ -187,30 +191,6 @@ cannot make the native concurrency bound exceed four.
 curl -s -X POST http://127.0.0.1:8000/api/MarkAccent/ \
      -H 'Content-Type: application/json' \
      -d '{"text":"三月五日（土）"}' | python -m json.tool
-```
-
-## How to use a shared `httpx.AsyncClient`
-
-If your router needs to send HTTP requests, follow this pattern to
-reuse the connection pool managed by `api.dependencies`:
-
-```python
-import httpx
-from fastapi import APIRouter, Depends
-from api.dependencies import get_http_client
-
-router = APIRouter()
-
-@router.post("/Foo/", tags=["Foo"], response_model=FooResponse)
-async def foo(
-    request: FooRequest, client: httpx.AsyncClient = Depends(get_http_client)
-):
-    try:
-        response = await client.post(url)
-    except httpx.TimeoutException:
-        ...
-    except httpx.HTTPError as e:
-        ...
 ```
 
 ## Known limitations

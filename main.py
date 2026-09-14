@@ -1,9 +1,6 @@
 """
-An API interface that provide the following functionalities
-(1) Accent Marker   (/api/MarkAccent/  +  /api/MarkAccent/stream/)
-(2) Usage Query     (/api/UsageQuery/)
-(3) Dictionary Query (/api/DictQuery/)
-(4) Sentence Query  (/api/SentenceQuery/)
+An API interface that marks Japanese pitch accent and furigana on input text
+(/api/MarkAccent/  +  /api/MarkAccent/stream/).
 """
 
 import asyncio
@@ -11,10 +8,8 @@ import logging
 from contextlib import asynccontextmanager
 from typing import AsyncGenerator
 
-import httpx
 from fastapi import FastAPI
 
-from api import dict_query, sentence_query, usage_query
 from api.accent import accent_router
 from api.accent.openjtalk import warmup as warmup_openjtalk
 from api.accent.tokenizer import warmup as warmup_tokenizer
@@ -35,9 +30,6 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     Args:
         app (FastAPI): The FastAPI application instance.
     """
-    # Set up resources before the application starts
-    app.state.http_client = httpx.AsyncClient(timeout=10.0)
-
     # Warm the accent engines (fugashi/UniDic tagger + OpenJTalk frontend) so
     # the first /MarkAccent/ request doesn't pay the one-off dictionary-load
     # latency. Both are blocking C-extension loads, so run them off the event
@@ -50,8 +42,6 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     logger.info("Accent engines ready.")
 
     yield
-    # Clean up resources after the application stops
-    await app.state.http_client.aclose()
 
 
 app = FastAPI(lifespan=lifespan)
@@ -60,11 +50,10 @@ app.add_middleware(
     max_body_bytes=MAX_REQUEST_BODY_BYTES,
 )
 
-# Include routers from different modules
+# The accent pipeline is the only router: it runs fully in-process, so the
+# application holds no shared HTTP client (see #54 — the former DictQuery /
+# SentenceQuery / UsageQuery scrapes and `api.dependencies` went with it).
 app.include_router(accent_router, prefix="/api")
-app.include_router(usage_query.router, prefix="/api")
-app.include_router(dict_query.router, prefix="/api")
-app.include_router(sentence_query.router, prefix="/api")
 logging.basicConfig(
     level=logging.INFO,
     format="{asctime} [{levelname:^8s}] {message} ({name}.{module}:{lineno})",
